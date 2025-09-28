@@ -1,0 +1,92 @@
+use crate::engine::ffi;
+use std::ffi::c_void;
+
+use glutin::prelude::GlDisplay;
+
+// `let state = unsafe { ... }` SAFETY: none of these callbacks borrows a mutable reference to the state
+
+pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let ret = state.implicit_view_state.make_current();
+    match ret {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("Failed to make context current: {:?}", e);
+            false
+        }
+    }
+}
+
+pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let ret = state.implicit_view_state.clear_current();
+    match ret {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("Failed to clear context: {:?}", e);
+            false
+        }
+    }
+}
+
+pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let ret = state.implicit_view_state.make_resource_current();
+    match ret {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("Failed to make resource context current: {:?}", e);
+            false
+        }
+    }
+}
+
+pub extern "C" fn gl_proc_resolver(user_data: *mut c_void, name: *const i8) -> *mut c_void {
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let name = unsafe { std::ffi::CStr::from_ptr(name) };
+    state.egl_display.get_proc_address(name) as *mut c_void
+}
+
+pub extern "C" fn present_with_info(
+    user_data: *mut c_void,
+    info: *const ffi::FlutterPresentInfo,
+) -> bool {
+    log::info!("present_with_info");
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let info = unsafe { &*info };
+    let damage = info.frame_damage;
+    let rects = Vec::with_capacity(damage.num_rects);
+    // for i in 0..damage.num_rects {
+    //     let rect = unsafe { &*damage.damage.offset(i as isize) };
+    //     // let rect = Rect::new(x, y, width, height); // TODO: Convert to Rect
+    // }
+    let ret = state.implicit_view_state.swap_buffers_with_damage(&rects);
+    match ret {
+        Ok(_) => true,
+        Err(e) => {
+            log::error!("Failed to swap buffers: {:?}", e);
+            false
+        }
+    }
+}
+
+pub extern "C" fn fbo_with_frame_info_callback(
+    _state: *mut c_void,
+    _info: *const ffi::FlutterFrameInfo,
+) -> u32 {
+    0
+}
+
+pub extern "C" fn log_message_callback(
+    tag: *const i8,
+    message: *const i8,
+    _user_data: *mut c_void,
+) {
+    let tag = unsafe { std::ffi::CStr::from_ptr(tag) };
+    let message = unsafe { std::ffi::CStr::from_ptr(message) };
+    log::info!(
+        "[{}] {}",
+        tag.to_str().unwrap_or("<invalid utf8>"),
+        message.to_str().unwrap_or("<invalid utf8>")
+    );
+}
