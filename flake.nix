@@ -37,7 +37,6 @@
             extensions = [
               "rust-src"
               "rust-analyzer"
-              "miri"
             ];
           })
           rustPlatform.bindgenHook

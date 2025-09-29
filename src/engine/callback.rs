@@ -1,4 +1,4 @@
-use crate::engine::ffi;
+use crate::engine::{ffi, TaskRunnerDataInner};
 use std::ffi::c_void;
 
 use glutin::prelude::GlDisplay;
@@ -89,4 +89,14 @@ pub extern "C" fn log_message_callback(
         tag.to_str().unwrap_or("<invalid utf8>"),
         message.to_str().unwrap_or("<invalid utf8>")
     );
+}
+
+pub extern "C" fn runs_task_on_current_thread_callback(user_data: *mut c_void) -> bool {
+    let task_runner_data = unsafe { &*(user_data as *const TaskRunnerDataInner) };
+    task_runner_data.main_thread == std::thread::current().id()
+}
+
+pub extern "C" fn post_task_callback(task: ffi::FlutterTask, target_time_nanos: u64, user_data: *mut c_void) {
+    let task_runner_data = unsafe { &*(user_data as *const TaskRunnerDataInner) };
+    let _ = task_runner_data.tx.send_blocking((task, target_time_nanos)); // unbound channel
 }

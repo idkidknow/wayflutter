@@ -9,7 +9,10 @@ use glutin::{
     surface::{Rect, SurfaceAttributesBuilder, WindowSurface},
 };
 use raw_window_handle::{RawWindowHandle, WaylandWindowHandle};
-use smithay_client_toolkit::shell::wlr_layer::Anchor;
+use smithay_client_toolkit::reexports::protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1::Layer,
+    zwlr_layer_surface_v1::{Anchor, KeyboardInteractivity},
+};
 use wayland_client::{Proxy, protocol::wl_surface::WlSurface};
 
 use crate::wayland::{
@@ -18,7 +21,7 @@ use crate::wayland::{
 };
 
 pub struct ViewState {
-    _layer: LayerSurface,
+    layer: LayerSurface,
     surface: egl::surface::Surface<WindowSurface>,
     context: PossiblyCurrentContext,
     resource_context: PossiblyCurrentContext,
@@ -29,21 +32,17 @@ impl ViewState {
         conn: &WaylandConnection,
         egl_display: &egl::display::Display,
     ) -> Result<Self> {
-        let layer = conn.create_layer_surface(CreateLayerSurfaceProp {
-            layer: smithay_client_toolkit::shell::wlr_layer::Layer::Background,
-            namespace: Some("aaaaa".to_owned()),
-            output: None,
-            size: Some(Size {
+        let layer_prop = CreateLayerSurfaceProp::builder()
+            .layer(Layer::Background)
+            .namespace("aaaaa")
+            .size(Size {
                 width: 800,
                 height: 600,
-            }),
-            anchor: Some(Anchor::RIGHT),
-            exclusive_zone: None,
-            margin: None,
-            keyboard_interactivity: Some(
-                smithay_client_toolkit::shell::wlr_layer::KeyboardInteractivity::OnDemand,
-            ),
-        })?;
+            })
+            .anchor(Anchor::Right)
+            .keyboard_interactivity(KeyboardInteractivity::OnDemand)
+            .build();
+        let layer = conn.create_layer_surface(layer_prop)?;
         let wl_surface = layer.wl_surface();
 
         let egl_config = unsafe {
@@ -79,11 +78,15 @@ impl ViewState {
         };
 
         Ok(Self {
-            _layer: layer,
+            layer,
             surface: egl_window_surface,
             context: egl_context,
             resource_context: resource_context,
         })
+    }
+
+    pub fn layer(&self) -> &LayerSurface {
+        &self.layer
     }
 
     pub fn make_current(&self) -> Result<()> {

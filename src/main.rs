@@ -27,13 +27,15 @@ fn main() -> Result<()> {
     let asset_path = PathBuf::from(args.get(1).expect("no asset path given"));
     let icu_data_path = PathBuf::from(args.get(2).expect("no icu data path given"));
 
-    smol::block_on(async {
+    let local_ex = smol::LocalExecutor::new();
+
+    smol::future::block_on(local_ex.run(async {
         futures::join!(run_wayland_client, async {
-            run_flutter(conn2, &asset_path, &icu_data_path)
+            run_flutter(conn2, &asset_path, &icu_data_path, &local_ex)
                 .await
                 .unwrap();
         });
-    });
+    }));
 
     Ok(())
 }

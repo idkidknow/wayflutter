@@ -1,20 +1,32 @@
-use smithay_client_toolkit::shell::wlr_layer::LayerSurface as SctkLayerSurface;
-use smithay_client_toolkit::shell::{
-    WaylandSurface,
-    wlr_layer::{Anchor, KeyboardInteractivity, Layer},
-};
-use wayland_client::protocol::{wl_output::WlOutput, wl_surface::WlSurface};
+use std::sync::{Arc, OnceLock, Weak};
 
-#[derive(Debug, Clone)]
+use anyhow::Result;
+use bon::Builder;
+use smithay_client_toolkit::{
+    compositor::Surface,
+    reexports::protocols_wlr::layer_shell::v1::client::{
+        zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
+        zwlr_layer_surface_v1::{Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
+    },
+};
+use wayland_client::{
+    Dispatch, QueueHandle,
+    globals::GlobalList,
+    protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+};
+
+#[derive(Builder)]
 pub struct CreateLayerSurfaceProp {
-    pub layer: Layer,
-    pub namespace: Option<String>,
-    pub output: Option<WlOutput>,
-    pub size: Option<Size>,
-    pub anchor: Option<Anchor>,
-    pub exclusive_zone: Option<i32>,
-    pub margin: Option<Margin>,
-    pub keyboard_interactivity: Option<KeyboardInteractivity>,
+    pub(super) layer: Layer,
+    #[builder(into)]
+    pub(super) namespace: Option<String>,
+    pub(super) output: Option<WlOutput>,
+    pub(super) size: Option<Size>,
+    pub(super) anchor: Option<Anchor>,
+    pub(super) exclusive_zone: Option<i32>,
+    pub(super) margin: Option<Margin>,
+    pub(super) keyboard_interactivity: Option<KeyboardInteractivity>,
+    pub(super) exclusive_edge: Option<Anchor>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -31,12 +43,87 @@ pub struct Margin {
     pub bottom: i32,
 }
 
-pub struct LayerSurface {
-    pub(super) inner: SctkLayerSurface,
+pub struct LayerShell {
+    wlr_layer_shell: ZwlrLayerShellV1,
 }
+
+impl LayerShell {
+    pub fn bind<S>(globals: &GlobalList, qh: &QueueHandle<S>) -> Result<Self>
+    where
+        S: Dispatch<ZwlrLayerShellV1, (), S> + 'static,
+    {
+        Ok(Self {
+            wlr_layer_shell: globals.bind(qh, 1..=5, ())?,
+        })
+    }
+
+    pub fn create_layer_surface<S>(
+        &self,
+        qh: &QueueHandle<S>,
+        surface: Surface,
+        output: Option<&WlOutput>,
+        layer: Layer,
+        namespace: String,
+    ) -> LayerSurface
+    where
+        S: Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData, S> + 'static,
+    {
+        let layer_surface_inner: Arc<LayerSurfaceInner> = Arc::new_cyclic(|weak| {
+            let layer_surface = self.wlr_layer_shell.get_layer_surface(
+                surface.wl_surface(),
+                output,
+                layer,
+                namespace,
+                qh,
+                LayerSurfaceData {
+                    inner: weak.clone(),
+                },
+            );
+            LayerSurfaceInner {
+                surface: surface,
+                layer_surface: layer_surface,
+                on_configure: OnceLock::new(),
+            }
+        });
+
+        LayerSurface(layer_surface_inner)
+    }
+}
+
+impl Drop for LayerShell {
+    fn drop(&mut self) {
+        self.wlr_layer_shell.destroy();
+    }
+}
+
+pub struct LayerSurface(Arc<LayerSurfaceInner>);
 
 impl LayerSurface {
     pub fn wl_surface(&self) -> &WlSurface {
-        self.inner.wl_surface()
+        self.0.surface.wl_surface()
     }
+
+    pub fn wlr_layer_surface(&self) -> &ZwlrLayerSurfaceV1 {
+        &self.0.layer_surface
+    }
+
+    pub fn set_on_configure(&self, on_configure: impl Fn(Size) + Send + Sync + 'static) {
+        let _ = self.0.on_configure.set(Box::new(on_configure));
+    }
+}
+
+pub(super) struct LayerSurfaceInner {
+    surface: Surface,
+    layer_surface: ZwlrLayerSurfaceV1,
+    pub(super) on_configure: OnceLock<Box<dyn Fn(Size) + Send + Sync + 'static>>,
+}
+
+impl Drop for LayerSurfaceInner {
+    fn drop(&mut self) {
+        self.layer_surface.destroy();
+    }
+}
+
+pub struct LayerSurfaceData {
+    pub(super) inner: Weak<LayerSurfaceInner>,
 }
