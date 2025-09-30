@@ -1,4 +1,4 @@
-use crate::engine::{ffi, TaskRunnerDataInner};
+use crate::engine::ffi;
 use std::ffi::c_void;
 
 use glutin::prelude::GlDisplay;
@@ -6,7 +6,7 @@ use glutin::prelude::GlDisplay;
 // `let state = unsafe { ... }` SAFETY: none of these callbacks borrows a mutable reference to the state
 
 pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
     let ret = state.implicit_view_state.make_current();
     match ret {
         Ok(_) => true,
@@ -18,7 +18,7 @@ pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
 }
 
 pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
     let ret = state.implicit_view_state.clear_current();
     match ret {
         Ok(_) => true,
@@ -30,7 +30,7 @@ pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
 }
 
 pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
     let ret = state.implicit_view_state.make_resource_current();
     match ret {
         Ok(_) => true,
@@ -42,7 +42,7 @@ pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
 }
 
 pub extern "C" fn gl_proc_resolver(user_data: *mut c_void, name: *const i8) -> *mut c_void {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
     let name = unsafe { std::ffi::CStr::from_ptr(name) };
     state.egl_display.get_proc_address(name) as *mut c_void
 }
@@ -52,7 +52,7 @@ pub extern "C" fn present_with_info(
     info: *const ffi::FlutterPresentInfo,
 ) -> bool {
     log::info!("present_with_info");
-    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
     let info = unsafe { &*info };
     let damage = info.frame_damage;
     let rects = Vec::with_capacity(damage.num_rects);
@@ -92,11 +92,18 @@ pub extern "C" fn log_message_callback(
 }
 
 pub extern "C" fn runs_task_on_current_thread_callback(user_data: *mut c_void) -> bool {
-    let task_runner_data = unsafe { &*(user_data as *const TaskRunnerDataInner) };
-    task_runner_data.main_thread == std::thread::current().id()
+    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    state.task_runner_data.main_thread == std::thread::current().id()
 }
 
-pub extern "C" fn post_task_callback(task: ffi::FlutterTask, target_time_nanos: u64, user_data: *mut c_void) {
-    let task_runner_data = unsafe { &*(user_data as *const TaskRunnerDataInner) };
-    let _ = task_runner_data.tx.send_blocking((task, target_time_nanos)); // unbound channel
+pub extern "C" fn post_task_callback(
+    task: ffi::FlutterTask,
+    target_time_nanos: u64,
+    user_data: *mut c_void,
+) {
+    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let _ = state
+        .task_runner_data
+        .tx
+        .send_blocking((task, target_time_nanos)); // unbound channel
 }

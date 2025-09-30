@@ -38,14 +38,13 @@ pub async fn run_flutter(
 
     let (task_runner_tx, task_runner_rx) = smol::channel::unbounded::<(ffi::FlutterTask, u64)>();
     let task_runner_data = TaskRunnerData::new_on_current_thread(task_runner_tx);
-    let task_runner_data_ptr = task_runner_data.0;
 
-    let state = FlutterEngineState {
+    let state = FlutterEngineState::new(FlutterEngineStateInner {
         implicit_view_state: ViewState::new_layer_surface(&conn, &egl_display)?,
         _wayland_connection: conn,
         egl_display: egl_display,
-        _task_runner_data: task_runner_data,
-    };
+        task_runner_data,
+    });
 
     let renderer_config = ffi::FlutterRendererConfig {
         type_: ffi::FlutterRendererType_kOpenGL,
@@ -73,7 +72,7 @@ pub async fn run_flutter(
 
     let platform_task_runner = ffi::FlutterTaskRunnerDescription {
         struct_size: size_of::<ffi::FlutterTaskRunnerDescription>(),
-        user_data: task_runner_data_ptr as _,
+        user_data: unsafe { &*state.0 } as *const _ as _,
         runs_task_on_current_thread_callback: Some(callback::runs_task_on_current_thread_callback),
         post_task_callback: Some(callback::post_task_callback),
         identifier: 1,
@@ -104,7 +103,7 @@ pub async fn run_flutter(
 
     let (configure_tx, configure_rx) = smol::channel::bounded::<Size>(1);
     {
-        let state = unsafe { &*engine.state };
+        let state = unsafe { &*engine.state.0 };
         state
             .implicit_view_state
             .layer()
@@ -168,8 +167,7 @@ pub async fn run_flutter(
 
 struct FlutterEngine {
     engine: ffi::FlutterEngine,
-    /// do not borrow &mut
-    state: *const FlutterEngineState,
+    state: FlutterEngineState,
 }
 
 impl FlutterEngine {
@@ -178,8 +176,6 @@ impl FlutterEngine {
         renderer_config: &ffi::FlutterRendererConfig,
         project_args: &ffi::FlutterProjectArgs,
     ) -> Result<Self> {
-        let state = Box::into_raw(Box::new(state));
-
         let engine = unsafe {
             let mut engine: ffi::FlutterEngine = std::ptr::null_mut();
             let engine_out: *mut ffi::FlutterEngine = &mut engine as *mut _;
@@ -187,7 +183,7 @@ impl FlutterEngine {
                 ffi::FLUTTER_ENGINE_VERSION as usize,
                 renderer_config as _,
                 project_args as _,
-                state as _,
+                state.0 as _,
                 engine_out,
             )
             .into_flutter_engine_result()?;
@@ -210,16 +206,30 @@ impl Drop for FlutterEngine {
     fn drop(&mut self) {
         unsafe {
             ffi::FlutterEngineDeinitialize(self.engine);
-            let _ = Box::from_raw(self.state as *mut FlutterEngineState);
         }
     }
 }
 
-struct FlutterEngineState {
+struct FlutterEngineState(*const FlutterEngineStateInner);
+
+impl FlutterEngineState {
+    fn new(inner: FlutterEngineStateInner) -> Self {
+        Self(Box::into_raw(Box::new(inner)))
+    }
+}
+
+impl Drop for FlutterEngineState {
+    fn drop(&mut self) {
+        let _ = unsafe { Box::from_raw(self.0 as *mut FlutterEngineStateInner) };
+    }
+}
+
+/// Read only. Need interior mutability if necessary.
+struct FlutterEngineStateInner {
     _wayland_connection: Rc<WaylandConnection>,
     egl_display: egl::display::Display,
     implicit_view_state: ViewState,
-    _task_runner_data: TaskRunnerData,
+    task_runner_data: TaskRunnerData,
 }
 
 fn get_egl_display(conn: &WaylandConnection) -> Result<egl::display::Display> {
@@ -235,27 +245,16 @@ fn get_egl_display(conn: &WaylandConnection) -> Result<egl::display::Display> {
     Ok(display)
 }
 
-struct TaskRunnerData(*const TaskRunnerDataInner);
+struct TaskRunnerData {
+    tx: smol::channel::Sender<(ffi::FlutterTask, u64)>,
+    main_thread: std::thread::ThreadId,
+}
 
 impl TaskRunnerData {
     fn new_on_current_thread(tx: smol::channel::Sender<(ffi::FlutterTask, u64)>) -> Self {
-        Self(
-            Box::into_raw(Box::new(TaskRunnerDataInner {
-                tx,
-                main_thread: std::thread::current().id(),
-            }))
-            .cast(),
-        )
+        Self {
+            tx,
+            main_thread: std::thread::current().id(),
+        }
     }
-}
-
-impl Drop for TaskRunnerData {
-    fn drop(&mut self) {
-        let _ = unsafe { Box::from_raw(self.0 as *mut TaskRunnerDataInner) };
-    }
-}
-
-struct TaskRunnerDataInner {
-    tx: smol::channel::Sender<(ffi::FlutterTask, u64)>,
-    main_thread: std::thread::ThreadId,
 }
