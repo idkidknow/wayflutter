@@ -2,13 +2,15 @@ use crate::engine::ffi;
 use std::ffi::c_void;
 
 use anyhow::Context;
-use glutin::prelude::GlDisplay;
+use glutin::prelude::{GlDisplay, PossiblyCurrentGlContext};
 
 // `let state = unsafe { ... }` SAFETY: none of these callbacks borrows a mutable reference to the state
 
 pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
-    let ret = state.implicit_view_state.make_current();
+    let context = &state.opengl_state.render_context;
+    let surface = &state.implicit_view_state.surface;
+    let ret = context.make_current(surface);
     match ret {
         Ok(_) => true,
         Err(_) => {
@@ -22,7 +24,8 @@ pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
 
 pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
-    let ret = state.implicit_view_state.clear_current();
+    let context = &state.opengl_state.render_context;
+    let ret = context.make_not_current_in_place();
     match ret {
         Ok(_) => true,
         Err(_) => {
@@ -36,7 +39,8 @@ pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
 
 pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
-    let ret = state.implicit_view_state.make_resource_current();
+    let context = &state.opengl_state.resource_context;
+    let ret = context.make_current_surfaceless();
     match ret {
         Ok(_) => true,
         Err(_) => {
@@ -51,7 +55,7 @@ pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
 pub extern "C" fn gl_proc_resolver(user_data: *mut c_void, name: *const i8) -> *mut c_void {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
     let name = unsafe { std::ffi::CStr::from_ptr(name) };
-    state.egl_display.get_proc_address(name) as *mut c_void
+    state.opengl_state.egl_display.get_proc_address(name) as *mut c_void
 }
 
 pub extern "C" fn present_with_info(
@@ -59,6 +63,9 @@ pub extern "C" fn present_with_info(
     info: *const ffi::FlutterPresentInfo,
 ) -> bool {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let context = &state.opengl_state.render_context;
+    let surface = &state.implicit_view_state.surface;
+
     let info = unsafe { &*info };
     let damage = info.frame_damage;
     let rects = Vec::with_capacity(damage.num_rects);
@@ -66,7 +73,7 @@ pub extern "C" fn present_with_info(
     //     let rect = unsafe { &*damage.damage.offset(i as isize) };
     //     // let rect = Rect::new(x, y, width, height); // TODO: Convert to Rect
     // }
-    let ret = state.implicit_view_state.swap_buffers_with_damage(&rects);
+    let ret = surface.swap_buffers_with_damage(&context, &rects);
     match ret {
         Ok(_) => true,
         Err(_) => {

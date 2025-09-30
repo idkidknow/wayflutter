@@ -1,21 +1,17 @@
 mod callback;
 mod error;
+mod opengl;
 mod view;
 
-use std::{
-    ffi::CString, os::unix::ffi::OsStrExt, path::Path, ptr::NonNull, rc::Rc, time::Duration,
-};
+use std::{ffi::CString, os::unix::ffi::OsStrExt, path::Path, rc::Rc, time::Duration};
 
 use anyhow::{Context, Result};
 use error::FFIFlutterEngineResultExt;
 use futures::FutureExt;
-use glutin::api::egl;
-use raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
 use smol::LocalExecutor;
-use wayland_client::Proxy;
 
 use crate::{
-    engine::view::ViewState,
+    engine::{opengl::OpenGLState, view::ViewState},
     wayland::{WaylandConnection, layer_shell::Size},
 };
 
@@ -34,18 +30,18 @@ pub async fn run_flutter(
     icu_data_path: &Path,
     executor: &LocalExecutor<'_>,
 ) -> Result<()> {
-    let egl_display = get_egl_display(&conn)?;
-
     let (task_runner_tx, task_runner_rx) = smol::channel::unbounded::<(ffi::FlutterTask, u64)>();
     let task_runner_data = TaskRunnerData::new_on_current_thread(task_runner_tx);
 
     let (terminate_tx, terminate_rx) = smol::channel::unbounded();
 
+    let opengl_state = OpenGLState::init(&conn)?;
+
     let state = FlutterEngineState::new(FlutterEngineStateInner {
         terminate: terminate_tx,
-        implicit_view_state: ViewState::new_layer_surface(&conn, &egl_display)?,
+        implicit_view_state: ViewState::new_layer_surface(&conn, &opengl_state)?,
         _wayland_connection: conn,
-        egl_display: egl_display,
+        opengl_state,
         task_runner_data,
     });
 
@@ -109,7 +105,7 @@ pub async fn run_flutter(
         let state = unsafe { &*engine.state.0 };
         state
             .implicit_view_state
-            .layer()
+            .layer
             .set_on_configure(move |size| {
                 let _ = configure_tx.force_send(size);
             });
@@ -248,22 +244,9 @@ impl Drop for FlutterEngineState {
 struct FlutterEngineStateInner {
     terminate: smol::channel::Sender<anyhow::Result<()>>,
     _wayland_connection: Rc<WaylandConnection>,
-    egl_display: egl::display::Display,
+    opengl_state: OpenGLState,
     implicit_view_state: ViewState,
     task_runner_data: TaskRunnerData,
-}
-
-fn get_egl_display(conn: &WaylandConnection) -> Result<egl::display::Display> {
-    // SAFETY: trust `wayland-client` crate and `libwayland`...
-    let display = unsafe {
-        let display = NonNull::new(conn.wl_display().id().as_ptr() as _)
-            .context("null wl_display pointer")?;
-        egl::display::Display::new(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-            display,
-        )))
-        .context("failed to create EGL display")?
-    };
-    Ok(display)
 }
 
 struct TaskRunnerData {
