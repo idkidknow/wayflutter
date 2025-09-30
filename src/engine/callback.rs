@@ -1,6 +1,7 @@
 use crate::engine::ffi;
 use std::ffi::c_void;
 
+use anyhow::Context;
 use glutin::prelude::GlDisplay;
 
 // `let state = unsafe { ... }` SAFETY: none of these callbacks borrows a mutable reference to the state
@@ -10,8 +11,10 @@ pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
     let ret = state.implicit_view_state.make_current();
     match ret {
         Ok(_) => true,
-        Err(e) => {
-            log::error!("Failed to make context current: {:?}", e);
+        Err(_) => {
+            let _ = state
+                .terminate
+                .send_blocking(ret.context("Failed to make context current."));
             false
         }
     }
@@ -22,8 +25,10 @@ pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
     let ret = state.implicit_view_state.clear_current();
     match ret {
         Ok(_) => true,
-        Err(e) => {
-            log::error!("Failed to clear context: {:?}", e);
+        Err(_) => {
+            let _ = state
+                .terminate
+                .send_blocking(ret.context("Failed to clear context."));
             false
         }
     }
@@ -34,8 +39,10 @@ pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
     let ret = state.implicit_view_state.make_resource_current();
     match ret {
         Ok(_) => true,
-        Err(e) => {
-            log::error!("Failed to make resource context current: {:?}", e);
+        Err(_) => {
+            let _ = state
+                .terminate
+                .send_blocking(ret.context("Failed to make resource context current."));
             false
         }
     }
@@ -51,7 +58,6 @@ pub extern "C" fn present_with_info(
     user_data: *mut c_void,
     info: *const ffi::FlutterPresentInfo,
 ) -> bool {
-    log::info!("present_with_info");
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
     let info = unsafe { &*info };
     let damage = info.frame_damage;
@@ -63,8 +69,10 @@ pub extern "C" fn present_with_info(
     let ret = state.implicit_view_state.swap_buffers_with_damage(&rects);
     match ret {
         Ok(_) => true,
-        Err(e) => {
-            log::error!("Failed to swap buffers: {:?}", e);
+        Err(_) => {
+            let _ = state
+                .terminate
+                .send_blocking(ret.context("Failed to swap buffers."));
             false
         }
     }

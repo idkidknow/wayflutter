@@ -3,12 +3,12 @@ mod error;
 mod view;
 
 use std::{
-    convert::Infallible, ffi::CString, os::unix::ffi::OsStrExt, path::Path, ptr::NonNull, rc::Rc,
-    time::Duration,
+    ffi::CString, os::unix::ffi::OsStrExt, path::Path, ptr::NonNull, rc::Rc, time::Duration,
 };
 
 use anyhow::{Context, Result};
 use error::FFIFlutterEngineResultExt;
+use futures::FutureExt;
 use glutin::api::egl;
 use raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
 use smol::LocalExecutor;
@@ -33,13 +33,16 @@ pub async fn run_flutter(
     asset_path: &Path,
     icu_data_path: &Path,
     executor: &LocalExecutor<'_>,
-) -> Result<Infallible> {
+) -> Result<()> {
     let egl_display = get_egl_display(&conn)?;
 
     let (task_runner_tx, task_runner_rx) = smol::channel::unbounded::<(ffi::FlutterTask, u64)>();
     let task_runner_data = TaskRunnerData::new_on_current_thread(task_runner_tx);
 
+    let (terminate_tx, terminate_rx) = smol::channel::unbounded();
+
     let state = FlutterEngineState::new(FlutterEngineStateInner {
+        terminate: terminate_tx,
         implicit_view_state: ViewState::new_layer_surface(&conn, &egl_display)?,
         _wayland_connection: conn,
         egl_display: egl_display,
@@ -143,26 +146,43 @@ pub async fn run_flutter(
 
     engine.run()?;
 
-    // Task runner
-    loop {
-        let (task, target_time) = task_runner_rx.recv().await?;
-        let now = unsafe { ffi::FlutterEngineGetCurrentTime() };
-        let delay = target_time.saturating_sub(now);
-        let engine_ptr = engine.engine;
-        if delay == 0 {
-            unsafe {
-                ffi::FlutterEngineRunTask(engine_ptr, &task as _).into_flutter_engine_result()?;
-            }
-        } else {
-            let future = async move {
-                smol::Timer::after(Duration::from_nanos(delay)).await;
+    let catch_fatal_errors = async move {
+        terminate_rx.recv().await?.context("fatal error")?;
+        anyhow::Ok(())
+    };
+
+    let task_runner = async move {
+        loop {
+            let (task, target_time) = task_runner_rx.recv().await?;
+            let now = unsafe { ffi::FlutterEngineGetCurrentTime() };
+            let delay = target_time.saturating_sub(now);
+            let engine_ptr = engine.engine;
+            if delay == 0 {
                 unsafe {
-                    ffi::FlutterEngineRunTask(engine_ptr, &task as _).into_flutter_engine_result()
+                    ffi::FlutterEngineRunTask(engine_ptr, &task as _)
+                        .into_flutter_engine_result()?;
                 }
-            };
-            executor.spawn(future).detach();
+            } else {
+                let future = async move {
+                    smol::Timer::after(Duration::from_nanos(delay)).await;
+                    unsafe {
+                        ffi::FlutterEngineRunTask(engine_ptr, &task as _)
+                            .into_flutter_engine_result()
+                    }
+                };
+                executor.spawn(future).detach();
+            }
         }
+        #[allow(unused)]
+        anyhow::Ok(())
+    };
+
+    futures::select! {
+        result = task_runner.fuse() => result?,
+        result = catch_fatal_errors.fuse() => result?,
     }
+
+    anyhow::Ok(())
 }
 
 struct FlutterEngine {
@@ -226,6 +246,7 @@ impl Drop for FlutterEngineState {
 
 /// Read only. Need interior mutability if necessary.
 struct FlutterEngineStateInner {
+    terminate: smol::channel::Sender<anyhow::Result<()>>,
     _wayland_connection: Rc<WaylandConnection>,
     egl_display: egl::display::Display,
     implicit_view_state: ViewState,
