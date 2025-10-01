@@ -1,17 +1,21 @@
 mod callback;
 mod error;
 mod opengl;
+mod task_runner;
 mod view;
 
-use std::{ffi::CString, os::unix::ffi::OsStrExt, path::Path, rc::Rc, time::Duration};
+use std::{ffi::CString, os::unix::ffi::OsStrExt, path::Path, rc::Rc};
 
 use anyhow::{Context, Result};
 use error::FFIFlutterEngineResultExt;
-use futures::FutureExt;
-use smol::LocalExecutor;
+use futures::{channel::mpsc::UnboundedSender, FutureExt, StreamExt};
 
 use crate::{
-    engine::{opengl::OpenGLState, view::ViewState},
+    engine::{
+        opengl::OpenGLState,
+        task_runner::{TaskRunnerData, run_task_runner},
+        view::ViewState,
+    },
     wayland::{WaylandConnection, layer_shell::Size},
 };
 
@@ -28,12 +32,11 @@ pub async fn run_flutter(
     conn: Rc<WaylandConnection>,
     asset_path: &Path,
     icu_data_path: &Path,
-    executor: &LocalExecutor<'_>,
 ) -> Result<()> {
-    let (task_runner_tx, task_runner_rx) = smol::channel::unbounded::<(ffi::FlutterTask, u64)>();
+    let (task_runner_tx, task_runner_rx) = futures::channel::mpsc::unbounded();
     let task_runner_data = TaskRunnerData::new_on_current_thread(task_runner_tx);
 
-    let (terminate_tx, terminate_rx) = smol::channel::unbounded();
+    let (terminate_tx, mut terminate_rx) = futures::channel::mpsc::unbounded();
 
     let opengl_state = OpenGLState::init(&conn)?;
 
@@ -100,20 +103,21 @@ pub async fn run_flutter(
     log::info!("init flutter engine");
     let engine = FlutterEngine::init(state, &renderer_config, &project_args)?;
 
-    let (configure_tx, configure_rx) = smol::channel::bounded::<Size>(1);
+    let (configure_tx, mut configure_rx) = futures::channel::mpsc::channel::<Size>(1);
     {
         let state = unsafe { &*engine.state.0 };
         state
             .implicit_view_state
             .layer
             .set_on_configure(move |size| {
-                let _ = configure_tx.force_send(size);
+                let mut configure_tx = configure_tx.clone();
+                let _ = configure_tx.try_send(size);
             });
     }
     let send_window_metrics_event = async move {
         loop {
             let Size { width, height } = configure_rx
-                .recv()
+                .next()
                 .await
                 .context("implicit view's configure event channel closed")?;
             let event = ffi::FlutterWindowMetricsEvent {
@@ -138,44 +142,24 @@ pub async fn run_flutter(
         #[allow(unused)]
         anyhow::Ok(())
     };
-    executor.spawn(send_window_metrics_event).detach();
 
     engine.run()?;
 
     let catch_fatal_errors = async move {
-        terminate_rx.recv().await?.context("fatal error")?;
+        terminate_rx
+            .next()
+            .await
+            .context("terminate event channel closed")?
+            .context("fatal error")?;
         anyhow::Ok(())
     };
 
-    let task_runner = async move {
-        loop {
-            let (task, target_time) = task_runner_rx.recv().await?;
-            let now = unsafe { ffi::FlutterEngineGetCurrentTime() };
-            let delay = target_time.saturating_sub(now);
-            let engine_ptr = engine.engine;
-            if delay == 0 {
-                unsafe {
-                    ffi::FlutterEngineRunTask(engine_ptr, &task as _)
-                        .into_flutter_engine_result()?;
-                }
-            } else {
-                let future = async move {
-                    smol::Timer::after(Duration::from_nanos(delay)).await;
-                    unsafe {
-                        ffi::FlutterEngineRunTask(engine_ptr, &task as _)
-                            .into_flutter_engine_result()
-                    }
-                };
-                executor.spawn(future).detach();
-            }
-        }
-        #[allow(unused)]
-        anyhow::Ok(())
-    };
+    let task_runner = run_task_runner(&engine, task_runner_rx);
 
     futures::select! {
         result = task_runner.fuse() => result?,
         result = catch_fatal_errors.fuse() => result?,
+        result = send_window_metrics_event.fuse() => result?,
     }
 
     anyhow::Ok(())
@@ -242,23 +226,9 @@ impl Drop for FlutterEngineState {
 
 /// Read only. Need interior mutability if necessary.
 struct FlutterEngineStateInner {
-    terminate: smol::channel::Sender<anyhow::Result<()>>,
+    terminate: UnboundedSender<anyhow::Result<()>>,
     _wayland_connection: Rc<WaylandConnection>,
     opengl_state: OpenGLState,
     implicit_view_state: ViewState,
     task_runner_data: TaskRunnerData,
-}
-
-struct TaskRunnerData {
-    tx: smol::channel::Sender<(ffi::FlutterTask, u64)>,
-    main_thread: std::thread::ThreadId,
-}
-
-impl TaskRunnerData {
-    fn new_on_current_thread(tx: smol::channel::Sender<(ffi::FlutterTask, u64)>) -> Self {
-        Self {
-            tx,
-            main_thread: std::thread::current().id(),
-        }
-    }
 }

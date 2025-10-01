@@ -1,4 +1,4 @@
-use crate::engine::ffi;
+use crate::engine::{ffi, task_runner::PendingTask};
 use std::ffi::c_void;
 
 use anyhow::Context;
@@ -12,7 +12,7 @@ macro_rules! error_in_callback {
             Err(e) => {
                 let _ = $state
                     .terminate
-                    .send_blocking(::anyhow::Result::Err(::anyhow::Error::from(e)));
+                    .unbounded_send(::anyhow::Result::Err(::anyhow::Error::from(e)));
                 return false;
             }
         }
@@ -120,8 +120,8 @@ pub extern "C" fn post_task_callback(
     user_data: *mut c_void,
 ) {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
-    let _ = state
-        .task_runner_data
-        .tx
-        .send_blocking((task, target_time_nanos)); // unbound channel
+    let _ = state.task_runner_data.tx.unbounded_send(PendingTask {
+        task,
+        target_nanos: target_time_nanos,
+    });
 }

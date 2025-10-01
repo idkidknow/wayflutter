@@ -31,7 +31,7 @@ fn main() -> Result<()> {
 
     smol::future::block_on(local_ex.run(async {
         futures::join!(run_wayland_client, async {
-            run_flutter(conn2, &asset_path, &icu_data_path, &local_ex)
+            run_flutter(conn2, &asset_path, &icu_data_path)
                 .await
                 .unwrap();
         });
