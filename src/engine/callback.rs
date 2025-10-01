@@ -1,48 +1,22 @@
 use crate::engine::{ffi, task_runner::PendingTask};
 use std::ffi::c_void;
 
-use anyhow::Context;
-use glutin::prelude::{GlDisplay, PossiblyCurrentGlContext};
+use crate::error_in_callback;
 
-/// Sends termination signal to the main event loop and returns false if $result is an error.
-macro_rules! error_in_callback {
-    ($state:ident, $result:expr) => {
-        match $result {
-            Ok(v) => v,
-            Err(e) => {
-                let _ = $state
-                    .terminate
-                    .unbounded_send(::anyhow::Result::Err(::anyhow::Error::from(e)));
-                return false;
-            }
-        }
-    };
-}
+use anyhow::Context;
+use glutin::prelude::GlDisplay;
 
 // `let state = unsafe { ... }` SAFETY: none of these callbacks borrows a mutable reference to the state
 
 pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
-    let context = &state.opengl_state.render_context;
-    let surface = &state.implicit_view_state.surface;
-    error_in_callback!(
-        state,
-        context
-            .make_current(surface)
-            .context("Failed to make context current.")
-    );
+    error_in_callback!(state, state.opengl_state.make_current_no_surface());
     true
 }
 
 pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
     let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
-    let context = &state.opengl_state.render_context;
-    error_in_callback!(
-        state,
-        context
-            .make_not_current_in_place()
-            .context("Failed to clear context.")
-    );
+    error_in_callback!(state, state.opengl_state.make_not_current());
     true
 }
 
@@ -65,27 +39,11 @@ pub extern "C" fn gl_proc_resolver(user_data: *mut c_void, name: *const i8) -> *
 }
 
 pub extern "C" fn present_with_info(
-    user_data: *mut c_void,
-    info: *const ffi::FlutterPresentInfo,
+    _user_data: *mut c_void,
+    _info: *const ffi::FlutterPresentInfo,
 ) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
-    let context = &state.opengl_state.render_context;
-    let surface = &state.implicit_view_state.surface;
-
-    let info = unsafe { &*info };
-    let damage = info.frame_damage;
-    let rects = Vec::with_capacity(damage.num_rects);
-    // for i in 0..damage.num_rects {
-    //     let rect = unsafe { &*damage.damage.offset(i as isize) };
-    //     // let rect = Rect::new(x, y, width, height); // TODO: Convert to Rect
-    // }
-    error_in_callback!(
-        state,
-        surface
-            .swap_buffers_with_damage(&context, &rects)
-            .context("Failed to swap buffers.")
-    );
-    true
+    // We have provided FlutterCompositor, so the engine shouldn't call this.
+    false
 }
 
 pub extern "C" fn fbo_with_frame_info_callback(

@@ -1,22 +1,24 @@
 mod callback;
+mod compositor;
 mod error;
 mod opengl;
 mod task_runner;
-mod view;
+#[macro_use]
+pub mod macros;
 
 use std::{ffi::CString, os::unix::ffi::OsStrExt, path::Path, rc::Rc};
 
 use anyhow::{Context, Result};
 use error::FFIFlutterEngineResultExt;
-use futures::{channel::mpsc::UnboundedSender, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, channel::mpsc::UnboundedSender};
 
 use crate::{
+    engine::compositor::Compositor,
     engine::{
         opengl::OpenGLState,
         task_runner::{TaskRunnerData, run_task_runner},
-        view::ViewState,
     },
-    wayland::{WaylandConnection, layer_shell::Size},
+    wayland::WaylandConnection,
 };
 
 mod ffi {
@@ -40,9 +42,11 @@ pub async fn run_flutter(
 
     let opengl_state = OpenGLState::init(&conn)?;
 
+    let (compositor, compositor_coroutine) = Compositor::init(&conn, &opengl_state)?;
+
     let state = FlutterEngineState::new(FlutterEngineStateInner {
         terminate: terminate_tx,
-        implicit_view_state: ViewState::new_layer_surface(&conn, &opengl_state)?,
+        compositor,
         _wayland_connection: conn,
         opengl_state,
         task_runner_data,
@@ -67,6 +71,16 @@ pub async fn run_flutter(
                 populate_existing_damage: None,
             },
         },
+    };
+
+    let flutter_compositor = ffi::FlutterCompositor {
+        struct_size: size_of::<ffi::FlutterCompositor>(),
+        user_data: unsafe { &*state.0 } as *const _ as _,
+        create_backing_store_callback: Some(compositor::callback::create_backing_store_callback),
+        collect_backing_store_callback: Some(compositor::callback::collect_backing_store_callback),
+        present_layers_callback: None,
+        avoid_backing_store_cache: false,
+        present_view_callback: Some(compositor::callback::present_view_callback),
     };
 
     let asset_path = CString::new(asset_path.as_os_str().as_bytes())?;
@@ -96,53 +110,13 @@ pub async fn run_flutter(
             icu_data_path: icu_data_path.as_ptr(),
             log_message_callback: Some(callback::log_message_callback),
             custom_task_runners: &custom_task_runners as _,
+            compositor: &flutter_compositor as _,
             ..core::mem::zeroed()
         }
     };
 
     log::info!("init flutter engine");
     let engine = FlutterEngine::init(state, &renderer_config, &project_args)?;
-
-    let (configure_tx, mut configure_rx) = futures::channel::mpsc::channel::<Size>(1);
-    {
-        let state = unsafe { &*engine.state.0 };
-        state
-            .implicit_view_state
-            .layer
-            .set_on_configure(move |size| {
-                let mut configure_tx = configure_tx.clone();
-                let _ = configure_tx.try_send(size);
-            });
-    }
-    let send_window_metrics_event = async move {
-        loop {
-            let Size { width, height } = configure_rx
-                .next()
-                .await
-                .context("implicit view's configure event channel closed")?;
-            let event = ffi::FlutterWindowMetricsEvent {
-                struct_size: size_of::<ffi::FlutterWindowMetricsEvent>(),
-                width: width as usize,
-                height: height as usize,
-                pixel_ratio: 1.0,
-                left: 0,
-                top: 0,
-                physical_view_inset_top: 0.0,
-                physical_view_inset_right: 0.0,
-                physical_view_inset_bottom: 0.0,
-                physical_view_inset_left: 0.0,
-                display_id: 0,
-                view_id: 0,
-            };
-            unsafe {
-                ffi::FlutterEngineSendWindowMetricsEvent(engine.engine, &event as _)
-                    .into_flutter_engine_result()?
-            }
-        }
-        #[allow(unused)]
-        anyhow::Ok(())
-    };
-
     engine.run()?;
 
     let catch_fatal_errors = async move {
@@ -159,7 +133,7 @@ pub async fn run_flutter(
     futures::select! {
         result = task_runner.fuse() => result?,
         result = catch_fatal_errors.fuse() => result?,
-        result = send_window_metrics_event.fuse() => result?,
+        result = compositor_coroutine.with(&engine).fuse() => result?,
     }
 
     anyhow::Ok(())
@@ -200,6 +174,10 @@ impl FlutterEngine {
         }
         Ok(())
     }
+
+    fn get_state_inner(&self) -> &FlutterEngineStateInner {
+        unsafe { &*self.state.0 }
+    }
 }
 
 impl Drop for FlutterEngine {
@@ -229,6 +207,6 @@ struct FlutterEngineStateInner {
     terminate: UnboundedSender<anyhow::Result<()>>,
     _wayland_connection: Rc<WaylandConnection>,
     opengl_state: OpenGLState,
-    implicit_view_state: ViewState,
+    compositor: Compositor,
     task_runner_data: TaskRunnerData,
 }
