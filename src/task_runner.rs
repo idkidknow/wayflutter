@@ -6,7 +6,7 @@ use futures::{
     channel::mpsc::{UnboundedReceiver, UnboundedSender},
 };
 
-use crate::engine::{FlutterEngine, error::FFIFlutterEngineResultExt, ffi};
+use crate::{FlutterEngine, error::FFIFlutterEngineResultExt, ffi};
 
 pub struct PendingTask {
     pub task: ffi::FlutterTask,

@@ -5,15 +5,14 @@ use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Surface},
     delegate_compositor, delegate_output, delegate_registry,
     output::{OutputHandler, OutputState},
-    reexports::protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1::ZwlrLayerShellV1, zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1}},
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
 };
 use wayland_client::{
-    Connection, Dispatch, EventQueue, globals::registry_queue_init, protocol::wl_display::WlDisplay,
+    Connection, EventQueue, globals::registry_queue_init, protocol::wl_display::WlDisplay,
 };
 
-use crate::wayland::layer_shell::{CreateLayerSurfaceProp, LayerShell, LayerSurface, LayerSurfaceData, Size};
+use layer_shell::{CreateLayerSurfaceProp, LayerShell, LayerSurface, Size};
 
 pub mod layer_shell;
 
@@ -48,7 +47,7 @@ impl WaylandConnection {
         })
     }
 
-    pub async fn run(&self) -> Result<Infallible> {
+    pub async fn run(self) -> Result<Infallible> {
         loop {
             // SAFETY: `Self: !Sync`, only one &mut inside brace, no reentrancy
             // and references are dropped before await point
@@ -114,7 +113,7 @@ impl WaylandConnection {
         if let Some(keyboard_interactivity) = prop.keyboard_interactivity {
             wlr_layer_surface.set_keyboard_interactivity(keyboard_interactivity);
         }
-        if let Some(exclusive_edge) = prop .exclusive_edge {
+        if let Some(exclusive_edge) = prop.exclusive_edge {
             wlr_layer_surface.set_exclusive_edge(exclusive_edge);
         }
 
@@ -228,40 +227,3 @@ impl CompositorHandler for State {
 }
 
 delegate_compositor!(State);
-
-impl Dispatch<ZwlrLayerShellV1, ()> for State {
-    fn event(
-        _state: &mut Self,
-        _proxy: &ZwlrLayerShellV1,
-        _event: <ZwlrLayerShellV1 as wayland_client::Proxy>::Event,
-        _data: &(),
-        _conn: &Connection,
-        _qhandle: &wayland_client::QueueHandle<Self>,
-    ) {
-        unreachable!();
-    }
-}
-
-impl Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData> for State {
-    fn event(
-        _state: &mut Self,
-        proxy: &ZwlrLayerSurfaceV1,
-        event: zwlr_layer_surface_v1::Event,
-        data: &LayerSurfaceData,
-        _conn: &Connection,
-        _qhandle: &wayland_client::QueueHandle<Self>,
-    ) {
-        match event {
-            zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
-                proxy.ack_configure(serial);
-                data.inner.upgrade().map(|inner| {
-                    if let Some(cb) = inner.on_configure.get() {
-                        cb(Size { width, height });
-                    }
-                });
-            },
-            zwlr_layer_surface_v1::Event::Closed => {},
-            _ => {},
-        }
-    }
-}

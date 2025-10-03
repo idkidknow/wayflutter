@@ -1,5 +1,5 @@
 use thiserror::Error;
-use crate::engine::ffi;
+use crate::ffi;
 
 #[derive(Debug, Error)]
 pub enum FlutterEngineError {

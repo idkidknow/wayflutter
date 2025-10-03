@@ -6,13 +6,11 @@ use smithay_client_toolkit::{
     compositor::Surface,
     reexports::protocols_wlr::layer_shell::v1::client::{
         zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1},
-        zwlr_layer_surface_v1::{Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
+        zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1},
     },
 };
 use wayland_client::{
-    Dispatch, QueueHandle,
-    globals::GlobalList,
-    protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+    globals::GlobalList, protocol::{wl_output::WlOutput, wl_surface::WlSurface}, Connection, Dispatch, QueueHandle
 };
 
 #[derive(Builder)]
@@ -127,3 +125,45 @@ impl Drop for LayerSurfaceInner {
 pub struct LayerSurfaceData {
     pub(super) inner: Weak<LayerSurfaceInner>,
 }
+
+impl Dispatch<ZwlrLayerShellV1, ()> for super::State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwlrLayerShellV1,
+        _event: <ZwlrLayerShellV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        unreachable!();
+    }
+}
+
+impl Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData> for super::State {
+    fn event(
+        _state: &mut Self,
+        proxy: &ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        data: &LayerSurfaceData,
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                proxy.ack_configure(serial);
+                data.inner.upgrade().map(|inner| {
+                    if let Some(cb) = inner.on_configure.get() {
+                        cb(Size { width, height });
+                    }
+                });
+            }
+            zwlr_layer_surface_v1::Event::Closed => {}
+            _ => {}
+        }
+    }
+}
+

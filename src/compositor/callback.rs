@@ -1,7 +1,7 @@
 use glutin::surface::GlSurface;
 
-use crate::engine::compositor::FlutterViewKind;
-use crate::engine::{FlutterEngineStateInner, ffi};
+use crate::compositor::FlutterViewKind;
+use crate::{FlutterEngineStateInner, ffi};
 use crate::error_in_callback;
 use std::ffi::c_void;
 

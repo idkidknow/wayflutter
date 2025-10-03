@@ -16,11 +16,11 @@ use smol::lock::RwLock;
 use wayland_client::Proxy;
 
 use crate::{
-    engine::{FlutterEngine, error::FFIFlutterEngineResultExt, ffi, opengl::OpenGLState},
     wayland::{
         WaylandConnection,
         layer_shell::{CreateLayerSurfaceProp, LayerSurface, Size},
     },
+    {FlutterEngine, error::FFIFlutterEngineResultExt, ffi, opengl::OpenGLState},
 };
 use egl::surface::Surface;
 
