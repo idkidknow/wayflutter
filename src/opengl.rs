@@ -62,11 +62,11 @@ impl OpenGLState {
                 .treat_as_possibly_current()
         };
 
-        let program = compile_shader_and_link_program(&render_context)?;
+        render_context.make_current_surfaceless()?;
+
+        let program = compile_shader_and_link_program()?;
         let (vertex_array, vertex_buffer) = unsafe {
             use gl::{types::*, *};
-
-            render_context.make_current_surfaceless()?;
 
             let vertices: [GLfloat; _] = [
                 -1.0, 1.0, 0.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
@@ -186,9 +186,7 @@ void main() {
 }
 ";
 
-fn compile_shader_and_link_program(context: &PossiblyCurrentContext) -> Result<gl::types::GLuint> {
-    context.make_current_surfaceless()?;
-
+fn compile_shader_and_link_program() -> Result<gl::types::GLuint> {
     use gl::{types::*, *};
 
     unsafe fn compile(type_: GLenum, src: &CStr) -> Result<GLuint> {
@@ -232,8 +230,6 @@ fn compile_shader_and_link_program(context: &PossiblyCurrentContext) -> Result<g
 
         program
     };
-
-    context.make_not_current_in_place()?;
 
     Ok(program)
 }

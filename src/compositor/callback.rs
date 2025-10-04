@@ -242,8 +242,6 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
                 }
             }
 
-            error_in_callback!(state, opengl_state.make_not_current());
-
             true
         }
     }
