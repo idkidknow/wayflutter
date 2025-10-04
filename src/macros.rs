@@ -1,5 +1,5 @@
 /// Used in engine callbacks.
-/// 
+///
 /// Sends termination signal to the main event loop and returns false if $result is an error.
 #[macro_export]
 macro_rules! error_in_callback {

@@ -1,5 +1,5 @@
-use thiserror::Error;
 use crate::ffi;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FlutterEngineError {
@@ -23,9 +23,13 @@ impl FFIFlutterEngineResultExt for ffi::FlutterEngineResult {
     fn into_flutter_engine_result(self) -> FlutterEngineResult {
         match self {
             ffi::FlutterEngineResult_kSuccess => Ok(()),
-            ffi::FlutterEngineResult_kInvalidLibraryVersion => Err(FlutterEngineError::InvalidLibraryVersion),
+            ffi::FlutterEngineResult_kInvalidLibraryVersion => {
+                Err(FlutterEngineError::InvalidLibraryVersion)
+            }
             ffi::FlutterEngineResult_kInvalidArguments => Err(FlutterEngineError::InvalidArguments),
-            ffi::FlutterEngineResult_kInternalInconsistency => Err(FlutterEngineError::InternalInconsistency),
+            ffi::FlutterEngineResult_kInternalInconsistency => {
+                Err(FlutterEngineError::InternalInconsistency)
+            }
             unknown => Err(FlutterEngineError::Unknown(unknown)),
         }
     }

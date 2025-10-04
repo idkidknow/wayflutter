@@ -1,5 +1,3 @@
-use std::sync::{Arc, OnceLock, Weak};
-
 use anyhow::Result;
 use bon::Builder;
 use smithay_client_toolkit::{
@@ -10,21 +8,30 @@ use smithay_client_toolkit::{
     },
 };
 use wayland_client::{
-    globals::GlobalList, protocol::{wl_output::WlOutput, wl_surface::WlSurface}, Connection, Dispatch, QueueHandle
+    Connection, Dispatch,
+    protocol::{wl_output::WlOutput, wl_surface::WlSurface},
 };
 
+use crate::FlutterEngine;
+
+type LayerSurfaceEventListener<T> =
+    for<'a> fn(&'a FlutterEngine, zwlr_layer_surface_v1::Event, &T);
+
 #[derive(Builder)]
-pub struct CreateLayerSurfaceProp {
-    pub(super) layer: Layer,
+pub struct CreateLayerSurfaceProp<T> {
+    layer: Layer,
     #[builder(into)]
-    pub(super) namespace: Option<String>,
-    pub(super) output: Option<WlOutput>,
-    pub(super) size: Option<Size>,
-    pub(super) anchor: Option<Anchor>,
-    pub(super) exclusive_zone: Option<i32>,
-    pub(super) margin: Option<Margin>,
-    pub(super) keyboard_interactivity: Option<KeyboardInteractivity>,
-    pub(super) exclusive_edge: Option<Anchor>,
+    namespace: Option<String>,
+    output: Option<WlOutput>,
+    size: Option<Size>,
+    anchor: Option<Anchor>,
+    exclusive_zone: Option<i32>,
+    margin: Option<Margin>,
+    keyboard_interactivity: Option<KeyboardInteractivity>,
+    exclusive_edge: Option<Anchor>,
+
+    event_listener: Option<LayerSurfaceEventListener<T>>,
+    user_data: T,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,89 +48,79 @@ pub struct Margin {
     pub bottom: i32,
 }
 
-pub struct LayerShell {
-    wlr_layer_shell: ZwlrLayerShellV1,
+pub struct LayerSurface {
+    surface: Surface,
+    wlr_layer_surface: ZwlrLayerSurfaceV1,
 }
-
-impl LayerShell {
-    pub fn bind<S>(globals: &GlobalList, qh: &QueueHandle<S>) -> Result<Self>
-    where
-        S: Dispatch<ZwlrLayerShellV1, (), S> + 'static,
-    {
-        Ok(Self {
-            wlr_layer_shell: globals.bind(qh, 1..=5, ())?,
-        })
-    }
-
-    pub fn create_layer_surface<S>(
-        &self,
-        qh: &QueueHandle<S>,
-        surface: Surface,
-        output: Option<&WlOutput>,
-        layer: Layer,
-        namespace: String,
-    ) -> LayerSurface
-    where
-        S: Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData, S> + 'static,
-    {
-        let layer_surface_inner: Arc<LayerSurfaceInner> = Arc::new_cyclic(|weak| {
-            let layer_surface = self.wlr_layer_shell.get_layer_surface(
-                surface.wl_surface(),
-                output,
-                layer,
-                namespace,
-                qh,
-                LayerSurfaceData {
-                    inner: weak.clone(),
-                },
-            );
-            LayerSurfaceInner {
-                surface: surface,
-                layer_surface: layer_surface,
-                on_configure: OnceLock::new(),
-            }
-        });
-
-        LayerSurface(layer_surface_inner)
-    }
-}
-
-impl Drop for LayerShell {
-    fn drop(&mut self) {
-        self.wlr_layer_shell.destroy();
-    }
-}
-
-pub struct LayerSurface(Arc<LayerSurfaceInner>);
 
 impl LayerSurface {
     pub fn wl_surface(&self) -> &WlSurface {
-        self.0.surface.wl_surface()
+        &self.surface.wl_surface()
     }
 
     pub fn wlr_layer_surface(&self) -> &ZwlrLayerSurfaceV1 {
-        &self.0.layer_surface
-    }
-
-    pub fn set_on_configure(&self, on_configure: impl Fn(Size) + Send + Sync + 'static) {
-        let _ = self.0.on_configure.set(Box::new(on_configure));
+        &self.wlr_layer_surface
     }
 }
 
-pub(super) struct LayerSurfaceInner {
-    surface: Surface,
-    layer_surface: ZwlrLayerSurfaceV1,
-    pub(super) on_configure: OnceLock<Box<dyn Fn(Size) + Send + Sync + 'static>>,
+pub trait WaylandClientLayerSurfaceExt {
+    fn create_layer_surface<T: Send + Sync + 'static>(
+        &self,
+        prop: CreateLayerSurfaceProp<T>,
+    ) -> Result<LayerSurface>;
 }
 
-impl Drop for LayerSurfaceInner {
-    fn drop(&mut self) {
-        self.layer_surface.destroy();
+impl WaylandClientLayerSurfaceExt for super::WaylandClient<'_> {
+    fn create_layer_surface<T: Send + Sync + 'static>(
+        &self,
+        prop: CreateLayerSurfaceProp<T>,
+    ) -> Result<LayerSurface> {
+        let layer_surface = {
+            let state = unsafe { &mut *self.state.get() };
+            let qh = unsafe { (&*self.queue.get()).handle() };
+            let surface = Surface::new(&state.compositor_state, &qh)?;
+            let wlr_layer_surface = state.layer_shell.get_layer_surface(
+                surface.wl_surface(),
+                prop.output.as_ref(),
+                prop.layer,
+                prop.namespace.unwrap_or_default(),
+                &qh,
+                (prop.event_listener.unwrap_or(|_, _, _| {}), prop.user_data),
+            );
+            LayerSurface {
+                surface,
+                wlr_layer_surface,
+            }
+        };
+
+        let wlr_layer_surface = layer_surface.wlr_layer_surface();
+
+        if let Some(anchor) = prop.anchor {
+            wlr_layer_surface.set_anchor(anchor);
+        }
+        if let Some(exclusive_zone) = prop.exclusive_zone {
+            wlr_layer_surface.set_exclusive_zone(exclusive_zone);
+        }
+        if let Some(margin) = prop.margin {
+            wlr_layer_surface.set_margin(margin.top, margin.right, margin.bottom, margin.left);
+        }
+        if let Some(keyboard_interactivity) = prop.keyboard_interactivity {
+            wlr_layer_surface.set_keyboard_interactivity(keyboard_interactivity);
+        }
+        if let Some(exclusive_edge) = prop.exclusive_edge {
+            wlr_layer_surface.set_exclusive_edge(exclusive_edge);
+        }
+
+        let size = prop.size.unwrap_or(Size {
+            width: 0,
+            height: 0,
+        });
+
+        wlr_layer_surface.set_size(size.width, size.height);
+        layer_surface.wl_surface().commit();
+
+        Ok(layer_surface)
     }
-}
-
-pub struct LayerSurfaceData {
-    pub(super) inner: Weak<LayerSurfaceInner>,
 }
 
 impl Dispatch<ZwlrLayerShellV1, ()> for super::WaylandState {
@@ -139,31 +136,16 @@ impl Dispatch<ZwlrLayerShellV1, ()> for super::WaylandState {
     }
 }
 
-impl Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData> for super::WaylandState {
+impl<T> Dispatch<ZwlrLayerSurfaceV1, (LayerSurfaceEventListener<T>, T)> for super::WaylandState {
     fn event(
-        _state: &mut Self,
-        proxy: &ZwlrLayerSurfaceV1,
+        state: &mut Self,
+        _proxy: &ZwlrLayerSurfaceV1,
         event: zwlr_layer_surface_v1::Event,
-        data: &LayerSurfaceData,
+        data: &(LayerSurfaceEventListener<T>, T),
         _conn: &Connection,
         _qhandle: &wayland_client::QueueHandle<Self>,
     ) {
-        match event {
-            zwlr_layer_surface_v1::Event::Configure {
-                serial,
-                width,
-                height,
-            } => {
-                proxy.ack_configure(serial);
-                data.inner.upgrade().map(|inner| {
-                    if let Some(cb) = inner.on_configure.get() {
-                        cb(Size { width, height });
-                    }
-                });
-            }
-            zwlr_layer_surface_v1::Event::Closed => {}
-            _ => {}
-        }
+        let (event_listener, user_data) = data;
+        event_listener(state.engine, event, user_data);
     }
 }
-

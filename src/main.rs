@@ -54,9 +54,9 @@ pub async fn run_flutter(asset_path: &Path, icu_data_path: &Path) -> Result<()> 
 
     let opengl_state = OpenGLState::init(&conn)?;
 
-    let wayland_client = WaylandClient::new(&conn)?;
+    let wayland_client = WaylandClient::new(&conn, &engine)?;
 
-    let (compositor, compositor_coroutine) = Compositor::init(&wayland_client, &opengl_state)?;
+    let compositor = Compositor::init(&wayland_client, &opengl_state)?;
 
     unsafe {
         engine.init_state(FlutterEngineState {
@@ -84,7 +84,6 @@ pub async fn run_flutter(asset_path: &Path, icu_data_path: &Path) -> Result<()> 
         result = wayland_client.run().fuse() => { result?; },
         result = task_runner.fuse() => result?,
         result = catch_fatal_errors.fuse() => result?,
-        result = compositor_coroutine.with(&engine).fuse() => result?,
     }
 
     anyhow::Ok(())
@@ -193,6 +192,7 @@ impl FlutterEngine {
         Ok(ret)
     }
 
+    /// Must not call twice
     unsafe fn init_state(&self, state: FlutterEngineState) {
         unsafe {
             self.state.write(state);
@@ -200,6 +200,7 @@ impl FlutterEngine {
         self.state_initialized.set(true);
     }
 
+    /// Must have called `init_state`
     unsafe fn get_state(&self) -> &FlutterEngineState {
         unsafe { &*self.state }
     }

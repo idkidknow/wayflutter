@@ -1,8 +1,8 @@
 use glutin::surface::GlSurface;
 
 use crate::compositor::FlutterViewKind;
-use crate::{FlutterEngineState, ffi};
 use crate::error_in_callback;
+use crate::{FlutterEngineState, ffi};
 use std::ffi::c_void;
 
 pub extern "C" fn create_backing_store_callback(
@@ -136,7 +136,7 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
             let egl_surface = &layer_surface_view.egl_surface;
 
             let (view_width, view_height) = {
-                let guard = view.size.read_blocking();
+                let guard = view.size.lock();
                 (guard.width, guard.height)
             };
             egl_surface.resize(&opengl_state.render_context, view_width, view_height);
@@ -197,7 +197,13 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
                             let mut prev_texture = 0;
                             GetIntegerv(TEXTURE_BINDING_2D, &mut prev_texture);
 
-                            log::info!("prev: {}, {}, {}, {}", prev_array_buffer, prev_vertex_array, prev_draw_framebuffer, prev_texture);
+                            log::info!(
+                                "prev: {}, {}, {}, {}",
+                                prev_array_buffer,
+                                prev_vertex_array,
+                                prev_draw_framebuffer,
+                                prev_texture
+                            );
 
                             BindFramebuffer(DRAW_FRAMEBUFFER, 0);
 
