@@ -9,19 +9,19 @@ use glutin::prelude::GlDisplay;
 // `let state = unsafe { ... }` SAFETY: none of these callbacks borrows a mutable reference to the state
 
 pub extern "C" fn make_current(user_data: *mut c_void) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
     error_in_callback!(state, state.opengl_state.make_current_no_surface());
     true
 }
 
 pub extern "C" fn clear_current(user_data: *mut c_void) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
     error_in_callback!(state, state.opengl_state.make_not_current());
     true
 }
 
 pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
     let context = &state.opengl_state.resource_context;
     error_in_callback!(
         state,
@@ -33,7 +33,7 @@ pub extern "C" fn make_resource_current(user_data: *mut c_void) -> bool {
 }
 
 pub extern "C" fn gl_proc_resolver(user_data: *mut c_void, name: *const i8) -> *mut c_void {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
     let name = unsafe { std::ffi::CStr::from_ptr(name) };
     state.opengl_state.egl_display.get_proc_address(name) as *mut c_void
 }
@@ -68,7 +68,7 @@ pub extern "C" fn log_message_callback(
 }
 
 pub extern "C" fn runs_task_on_current_thread_callback(user_data: *mut c_void) -> bool {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
     state.task_runner_data.main_thread == std::thread::current().id()
 }
 
@@ -77,7 +77,7 @@ pub extern "C" fn post_task_callback(
     target_time_nanos: u64,
     user_data: *mut c_void,
 ) {
-    let state = unsafe { &*(user_data as *const super::FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const super::FlutterEngineState) };
     let _ = state.task_runner_data.tx.unbounded_send(PendingTask {
         task,
         target_nanos: target_time_nanos,

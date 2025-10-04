@@ -126,7 +126,7 @@ pub struct LayerSurfaceData {
     pub(super) inner: Weak<LayerSurfaceInner>,
 }
 
-impl Dispatch<ZwlrLayerShellV1, ()> for super::State {
+impl Dispatch<ZwlrLayerShellV1, ()> for super::WaylandState {
     fn event(
         _state: &mut Self,
         _proxy: &ZwlrLayerShellV1,
@@ -139,7 +139,7 @@ impl Dispatch<ZwlrLayerShellV1, ()> for super::State {
     }
 }
 
-impl Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData> for super::State {
+impl Dispatch<ZwlrLayerSurfaceV1, LayerSurfaceData> for super::WaylandState {
     fn event(
         _state: &mut Self,
         proxy: &ZwlrLayerSurfaceV1,

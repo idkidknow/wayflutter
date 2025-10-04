@@ -1,7 +1,7 @@
 use glutin::surface::GlSurface;
 
 use crate::compositor::FlutterViewKind;
-use crate::{FlutterEngineStateInner, ffi};
+use crate::{FlutterEngineState, ffi};
 use crate::error_in_callback;
 use std::ffi::c_void;
 
@@ -10,7 +10,7 @@ pub extern "C" fn create_backing_store_callback(
     backing_store_out: *mut ffi::FlutterBackingStore,
     user_data: *mut c_void,
 ) -> bool {
-    let state = unsafe { &*(user_data as *const FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const FlutterEngineState) };
 
     let backing_store = unsafe { &mut *backing_store_out };
     if backing_store.struct_size < size_of::<ffi::FlutterBackingStore>() {
@@ -96,7 +96,7 @@ pub extern "C" fn collect_backing_store_callback(
     user_data: *mut c_void,
 ) -> bool {
     let backing_store = unsafe { &*backing_store };
-    let state = unsafe { &*(user_data as *const FlutterEngineStateInner) };
+    let state = unsafe { &*(user_data as *const FlutterEngineState) };
     error_in_callback!(state, state.opengl_state.make_current_no_surface());
 
     unsafe {
@@ -121,7 +121,7 @@ pub extern "C" fn collect_backing_store_callback(
 pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresentViewInfo) -> bool {
     let present_info = unsafe { &*present_info };
     let view_id = present_info.view_id;
-    let state = unsafe { &*(present_info.user_data as *const FlutterEngineStateInner) };
+    let state = unsafe { &*(present_info.user_data as *const FlutterEngineState) };
     let view = match state.compositor.get_view(view_id) {
         Some(view) => view,
         None => {

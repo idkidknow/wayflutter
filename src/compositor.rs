@@ -13,14 +13,10 @@ use smithay_client_toolkit::reexports::protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_surface_v1::{Anchor, KeyboardInteractivity},
 };
 use smol::lock::RwLock;
-use wayland_client::Proxy;
+use wayland_client::{Connection, Proxy};
 
 use crate::{
-    wayland::{
-        WaylandConnection,
-        layer_shell::{CreateLayerSurfaceProp, LayerSurface, Size},
-    },
-    {FlutterEngine, error::FFIFlutterEngineResultExt, ffi, opengl::OpenGLState},
+    error::FFIFlutterEngineResultExt, ffi, opengl::OpenGLState, wayland::{layer_shell::{CreateLayerSurfaceProp, LayerSurface, Size}, WaylandClient}, FlutterEngine
 };
 use egl::surface::Surface;
 
@@ -32,7 +28,7 @@ pub struct Compositor {
 
 impl Compositor {
     pub fn init(
-        conn: &WaylandConnection,
+        wayland_client: &WaylandClient<'_>,
         opengl_state: &OpenGLState,
     ) -> Result<(Self, CompositorCoroutine)> {
         let mut map = HashMap::with_capacity(1);
@@ -45,7 +41,7 @@ impl Compositor {
             .anchor(Anchor::Left | Anchor::Right | Anchor::Top | Anchor::Bottom)
             .keyboard_interactivity(KeyboardInteractivity::OnDemand)
             .build();
-        let layer_surface = conn.create_layer_surface(layer_prop)?;
+        let layer_surface = wayland_client.create_layer_surface(layer_prop)?;
         layer_surface.set_on_configure(move |Size { width, height }| {
             match (NonZero::new(width), NonZero::new(height)) {
                 (Some(width), Some(height)) => {
@@ -83,6 +79,7 @@ pub struct CompositorCoroutine {
 }
 
 impl CompositorCoroutine {
+    /// use this after FlutterEngine::init_state()
     pub async fn with(self, engine: &FlutterEngine) -> Result<()> {
         let mut resize_event_rx = self.resize_event_rx;
         loop {
@@ -94,7 +91,8 @@ impl CompositorCoroutine {
                 .await
                 .context("all resize event sender dropped")?;
 
-            let Some(view) = engine.get_state_inner().compositor.get_view(view_id) else {
+            let state = unsafe { engine.get_state() };
+            let Some(view) = state.compositor.get_view(view_id) else {
                 // The view has been removed
                 continue;
             };

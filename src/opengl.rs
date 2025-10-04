@@ -5,16 +5,18 @@ use std::{
 
 use anyhow::{Context, Result};
 use glutin::{
-    api::egl::{self, config::Config, context::PossiblyCurrentContext, display::Display, surface::Surface},
+    api::egl::{
+        config::Config, context::PossiblyCurrentContext, display::Display, surface::Surface,
+    },
     config::ConfigTemplate,
     context::ContextAttributesBuilder,
-    prelude::{GlDisplay, NotCurrentGlContext, PossiblyCurrentGlContext}, surface::WindowSurface,
+    prelude::{GlDisplay, NotCurrentGlContext, PossiblyCurrentGlContext},
+    surface::WindowSurface,
 };
 use raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
-use wayland_client::Proxy;
+use wayland_client::Connection;
 
-use crate::wayland::WaylandConnection;
-
+#[derive(Debug)]
 pub struct OpenGLState {
     pub egl_display: Display,
     pub egl_config: Config,
@@ -26,7 +28,7 @@ pub struct OpenGLState {
 }
 
 impl OpenGLState {
-    pub fn init(conn: &WaylandConnection) -> Result<Self> {
+    pub fn init(conn: &Connection) -> Result<Self> {
         let display = get_egl_display(conn)?;
 
         gl::load_with(|symbol| {
@@ -127,13 +129,15 @@ impl OpenGLState {
     }
 
     pub fn make_current_no_surface(&self) -> Result<()> {
-        self.render_context.make_current_surfaceless()
+        self.render_context
+            .make_current_surfaceless()
             .context("failed to make context current with EGL_NO_SURFACE")?;
         Ok(())
     }
 
     pub fn make_current(&self, surface: &Surface<WindowSurface>) -> Result<()> {
-        self.render_context.make_current(surface)
+        self.render_context
+            .make_current(surface)
             .context("failed to make context current")?;
         Ok(())
     }
@@ -144,11 +148,11 @@ impl OpenGLState {
     }
 }
 
-fn get_egl_display(conn: &WaylandConnection) -> Result<Display> {
+fn get_egl_display(conn: &Connection) -> Result<Display> {
     // SAFETY: trust `wayland-client` crate and `libwayland`...
     let display = unsafe {
-        let display = NonNull::new(conn.wl_display().id().as_ptr() as _)
-            .context("null wl_display pointer")?;
+        let display =
+            NonNull::new(conn.backend().display_ptr() as _).context("null wl_display pointer")?;
         Display::new(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
             display,
         )))
