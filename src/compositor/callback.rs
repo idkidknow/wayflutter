@@ -135,11 +135,23 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
             let opengl_state = &state.opengl_state;
             let egl_surface = &layer_surface_view.egl_surface;
 
-            let (view_width, view_height) = {
-                let guard = view.size.lock();
-                (guard.width, guard.height)
+            let (view_width, view_height, should_resize) = {
+                let mut guard = view.size.lock();
+                let should_resize = guard.1;
+                guard.1 = false;
+                (guard.0.width, guard.0.height, should_resize)
             };
-            egl_surface.resize(&opengl_state.render_context, view_width, view_height);
+            if should_resize {
+                egl_surface.resize(&opengl_state.render_context, view_width, view_height);
+                error_in_callback!(state, opengl_state.make_current(egl_surface));
+                error_in_callback!(
+                    state,
+                    layer_surface_view
+                        .egl_surface
+                        .swap_buffers(&opengl_state.render_context)
+                );
+                return false;
+            }
 
             error_in_callback!(state, opengl_state.make_current(egl_surface));
 

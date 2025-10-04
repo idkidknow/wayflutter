@@ -73,12 +73,15 @@ impl Compositor {
                                         ffi::FlutterEngineSendWindowMetricsEvent(engine.engine, &event)
                                             .into_flutter_engine_result()?;
                                     }
+                                    layer_surface.layer_surface.wlr_layer_surface().ack_configure(serial);
                                     {
                                         let mut guard = this.size.lock();
-                                        guard.width = width;
-                                        guard.height = height;
+
+                                        guard.0.width = width;
+                                        guard.0.height = height;
+                                        guard.1 = true;
                                     }
-                                    layer_surface.layer_surface.wlr_layer_surface().ack_configure(serial);
+                                    
                                 },
                                 _ => {},
                             }
@@ -98,10 +101,13 @@ impl Compositor {
                 layer_surface,
                 opengl_state,
             )?),
-            size: Mutex::new(NonZeroSize {
-                width: NonZero::new(1600).unwrap(),
-                height: NonZero::new(900).unwrap(),
-            }),
+            size: Mutex::new((
+                NonZeroSize {
+                    width: NonZero::new(1600).unwrap(),
+                    height: NonZero::new(900).unwrap(),
+                },
+                false,
+            )),
         };
         map.insert(implicit_view.view_id, implicit_view);
 
@@ -116,7 +122,7 @@ impl Compositor {
 pub struct FlutterView {
     pub view_id: ffi::FlutterViewId,
     pub kind: FlutterViewKind,
-    pub size: Mutex<NonZeroSize>,
+    pub size: Mutex<(NonZeroSize, /*should resize*/ bool)>,
 }
 
 pub enum FlutterViewKind {
