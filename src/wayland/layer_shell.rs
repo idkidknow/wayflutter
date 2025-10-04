@@ -8,14 +8,12 @@ use smithay_client_toolkit::{
     },
 };
 use wayland_client::{
-    Connection, Dispatch,
-    protocol::{wl_output::WlOutput, wl_surface::WlSurface},
+    protocol::{wl_output::WlOutput, wl_pointer::{ButtonState, WlPointer}, wl_surface::WlSurface}, Connection, Dispatch
 };
 
 use crate::FlutterEngine;
 
-type LayerSurfaceEventListener<T> =
-    for<'a> fn(&'a FlutterEngine, zwlr_layer_surface_v1::Event, &T);
+type LayerSurfaceEventListener<T> = for<'a> fn(&'a FlutterEngine, zwlr_layer_surface_v1::Event, &T);
 
 #[derive(Builder)]
 pub struct CreateLayerSurfaceProp<T> {
@@ -87,10 +85,17 @@ impl WaylandClientLayerSurfaceExt for super::WaylandClient<'_> {
                 &qh,
                 (prop.event_listener.unwrap_or(|_, _, _| {}), prop.user_data),
             );
-            LayerSurface {
+
+            let ret = LayerSurface {
                 surface,
                 wlr_layer_surface,
+            };
+
+            for seat in state.seat_state.seats() {
+                seat.get_pointer(&qh, ());
             }
+
+            ret
         };
 
         let wlr_layer_surface = layer_surface.wlr_layer_surface();
@@ -147,5 +152,30 @@ impl<T> Dispatch<ZwlrLayerSurfaceV1, (LayerSurfaceEventListener<T>, T)> for supe
     ) {
         let (event_listener, user_data) = data;
         event_listener(state.engine, event, user_data);
+    }
+}
+
+impl Dispatch<WlPointer, ()> for super::WaylandState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlPointer,
+        event: <WlPointer as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &wayland_client::QueueHandle<Self>,
+    ) {
+        match event {
+            wayland_client::protocol::wl_pointer::Event::Button {
+                serial: _,
+                time: _,
+                button: _,
+                state: button_state,
+            } => {
+                if button_state.into_result().unwrap() == ButtonState::Pressed {
+                    log::info!("Pressed");
+                }
+            }
+            _ => {}
+        }
     }
 }

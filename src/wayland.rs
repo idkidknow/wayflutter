@@ -3,11 +3,12 @@ use std::{cell::UnsafeCell, convert::Infallible, future::poll_fn, task::ready};
 use anyhow::Result;
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_output, delegate_registry,
+    delegate_compositor, delegate_output, delegate_registry, delegate_seat,
     output::{OutputHandler, OutputState},
     reexports::protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::ZwlrLayerShellV1,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{SeatHandler, SeatState},
 };
 use wayland_client::{Connection, EventQueue, globals::registry_queue_init};
 
@@ -27,6 +28,7 @@ impl<'a> WaylandClient<'a> {
         let qh = queue.handle();
         let output_state = OutputState::new(&globals, &qh);
         let compositor_state = CompositorState::bind(&globals, &qh)?;
+        let seat_state = SeatState::new(&globals, &qh);
         let layer_shell = globals.bind::<ZwlrLayerShellV1, _, _>(&qh, 1..=5, ())?;
 
         // `wayland-client` requires that the State struct should be 'static.
@@ -41,6 +43,7 @@ impl<'a> WaylandClient<'a> {
             registry_state: RegistryState::new(&globals),
             output_state,
             compositor_state,
+            seat_state,
             layer_shell,
         };
 
@@ -92,6 +95,7 @@ struct WaylandState {
     registry_state: RegistryState,
     output_state: OutputState,
     compositor_state: CompositorState,
+    seat_state: SeatState,
     layer_shell: ZwlrLayerShellV1,
 }
 
@@ -185,3 +189,45 @@ impl CompositorHandler for WaylandState {
 }
 
 delegate_compositor!(WaylandState);
+
+impl SeatHandler for WaylandState {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(
+        &mut self,
+        _conn: &Connection,
+        _qh: &wayland_client::QueueHandle<Self>,
+        _seat: wayland_client::protocol::wl_seat::WlSeat,
+    ) {
+    }
+
+    fn new_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &wayland_client::QueueHandle<Self>,
+        _seat: wayland_client::protocol::wl_seat::WlSeat,
+        _capability: smithay_client_toolkit::seat::Capability,
+    ) {
+    }
+
+    fn remove_capability(
+        &mut self,
+        _conn: &Connection,
+        _qh: &wayland_client::QueueHandle<Self>,
+        _seat: wayland_client::protocol::wl_seat::WlSeat,
+        _capability: smithay_client_toolkit::seat::Capability,
+    ) {
+    }
+
+    fn remove_seat(
+        &mut self,
+        _conn: &Connection,
+        _qh: &wayland_client::QueueHandle<Self>,
+        _seat: wayland_client::protocol::wl_seat::WlSeat,
+    ) {
+    }
+}
+
+delegate_seat!(WaylandState);
