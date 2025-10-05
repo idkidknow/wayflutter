@@ -1,0 +1,5 @@
+edition = "2024"
+unstable_features = true
+imports_granularity = "Item"
+group_imports = "StdExternalCrate"
+tab_spaces = 2
