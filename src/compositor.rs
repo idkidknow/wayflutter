@@ -27,8 +27,43 @@ use egl::surface::Surface;
 
 pub mod callback;
 
+#[derive(Debug, Clone, Copy)]
+pub struct ViewId {
+    raw: ffi::FlutterViewId,
+}
+
+impl ViewId {
+    pub fn new(raw: ffi::FlutterViewId) -> Self {
+        Self { raw }
+    }
+
+    pub fn raw(&self) -> ffi::FlutterViewId {
+        self.raw
+    }
+}
+
+impl PartialEq for ViewId {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw == other.raw
+    }
+}
+
+impl Eq for ViewId {}
+
+impl std::hash::Hash for ViewId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.raw.hash(state);
+    }
+}
+
+impl std::fmt::Display for ViewId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "view#{}", self.raw)
+    }
+}
+
 pub struct Compositor {
-    views: HashMap<ffi::FlutterViewId, FlutterView>,
+    views: HashMap<ViewId, FlutterView>,
 }
 
 impl Compositor {
@@ -41,13 +76,12 @@ impl Compositor {
             .namespace("aaaaa")
             .anchor(Anchor::Left | Anchor::Right | Anchor::Top | Anchor::Bottom)
             .keyboard_interactivity(KeyboardInteractivity::OnDemand)
-            .user_data(0 as ffi::FlutterViewId)
+            .user_data(ViewId::new(0))
             .event_listener(|engine, event, id| {
                 let state = unsafe { engine.get_state() };
                 let result = || {
-                    let id = *id;
-                    let this = state.compositor.get_view(id).with_context(|| {
-                        format!("Inconsistent: event from view #{}, which is not registered in the compositor", id)
+                    let this = state.compositor.get_view(*id).with_context(|| {
+                        format!("Inconsistent: event from {}, which is not registered in the compositor", id)
                     })?;
                     let FlutterViewKind::LayerSurface(layer_surface) = &this.kind;
 
@@ -67,7 +101,7 @@ impl Compositor {
                                         physical_view_inset_bottom: 0.0,
                                         physical_view_inset_left: 0.0,
                                         display_id: 0,
-                                        view_id: id,
+                                        view_id: id.raw(),
                                     };
                                     unsafe {
                                         ffi::FlutterEngineSendWindowMetricsEvent(engine.engine, &event)
@@ -96,7 +130,7 @@ impl Compositor {
             .build();
         let layer_surface = wayland_client.create_layer_surface(layer_prop)?;
         let implicit_view = FlutterView {
-            view_id: 0,
+            view_id: ViewId::new(0),
             kind: FlutterViewKind::LayerSurface(LayerSurfaceView::new(
                 layer_surface,
                 opengl_state,
@@ -114,16 +148,18 @@ impl Compositor {
         Ok(Self { views: map })
     }
 
-    pub fn get_view(&self, view_id: ffi::FlutterViewId) -> Option<&FlutterView> {
+    pub fn get_view(&self, view_id: ViewId) -> Option<&FlutterView> {
         self.views.get(&view_id)
     }
 }
 
 pub struct FlutterView {
-    pub view_id: ffi::FlutterViewId,
+    pub view_id: ViewId,
     pub kind: FlutterViewKind,
     pub size: Mutex<(NonZeroSize, /*should resize*/ bool)>,
 }
+
+
 
 pub enum FlutterViewKind {
     LayerSurface(LayerSurfaceView),
@@ -132,7 +168,7 @@ pub enum FlutterViewKind {
 
 pub struct LayerSurfaceView {
     layer_surface: LayerSurface,
-    pub egl_surface: Surface<WindowSurface>,
+    egl_surface: Mutex<Surface<WindowSurface>>,
 }
 
 impl LayerSurfaceView {
@@ -155,7 +191,7 @@ impl LayerSurfaceView {
 
         Ok(Self {
             layer_surface,
-            egl_surface: egl_window_surface,
+            egl_surface: Mutex::new(egl_window_surface),
         })
     }
 }

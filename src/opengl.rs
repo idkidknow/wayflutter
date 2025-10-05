@@ -20,12 +20,17 @@ use wayland_client::Connection;
 pub struct OpenGLState {
     pub egl_display: Display,
     pub egl_config: Config,
+    /// only used for the rasterizing thread after creation
     pub render_context: PossiblyCurrentContext,
     pub program: gl::types::GLuint,
     pub vertex_array: gl::types::GLuint,
     pub vertex_buffer: gl::types::GLuint,
+    /// only used for the flutter engine after creation
     pub resource_context: PossiblyCurrentContext,
 }
+
+/// Manully check contexts
+unsafe impl Sync for OpenGLState {}
 
 impl OpenGLState {
     pub fn init(conn: &Connection) -> Result<Self> {

@@ -1,6 +1,6 @@
 use glutin::surface::GlSurface;
 
-use crate::compositor::FlutterViewKind;
+use crate::compositor::{FlutterViewKind, ViewId};
 use crate::error_in_callback;
 use crate::{FlutterEngineState, ffi};
 use std::ffi::c_void;
@@ -120,12 +120,12 @@ pub extern "C" fn collect_backing_store_callback(
 
 pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresentViewInfo) -> bool {
     let present_info = unsafe { &*present_info };
-    let view_id = present_info.view_id;
+    let view_id = ViewId::new(present_info.view_id);
     let state = unsafe { &*(present_info.user_data as *const FlutterEngineState) };
     let view = match state.compositor.get_view(view_id) {
         Some(view) => view,
         None => {
-            log::warn!("View #{} not found", view_id);
+            log::warn!("{} not found", view_id);
             return false;
         }
     };
@@ -133,7 +133,7 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
     match &view.kind {
         FlutterViewKind::LayerSurface(layer_surface_view) => {
             let opengl_state = &state.opengl_state;
-            let egl_surface = &layer_surface_view.egl_surface;
+            let egl_surface = &layer_surface_view.egl_surface.lock();
 
             let (view_width, view_height, should_resize) = {
                 let mut guard = view.size.lock();
@@ -146,9 +146,7 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
                 error_in_callback!(state, opengl_state.make_current(egl_surface));
                 error_in_callback!(
                     state,
-                    layer_surface_view
-                        .egl_surface
-                        .swap_buffers(&opengl_state.render_context)
+                    egl_surface.swap_buffers(&opengl_state.render_context)
                 );
                 return false;
             }
@@ -231,9 +229,7 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
                             DrawArrays(TRIANGLES, 0, 6);
                             error_in_callback!(
                                 state,
-                                layer_surface_view
-                                    .egl_surface
-                                    .swap_buffers(&opengl_state.render_context)
+                                egl_surface.swap_buffers(&opengl_state.render_context)
                             );
 
                             // restore

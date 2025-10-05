@@ -13,6 +13,8 @@ pub struct PendingTask {
     pub target_nanos: u64,
 }
 
+unsafe impl Send for PendingTask {}
+
 impl PartialEq for PendingTask {
     fn eq(&self, other: &Self) -> bool {
         self.target_nanos == other.target_nanos

@@ -3,9 +3,9 @@ mod compositor;
 mod error;
 mod opengl;
 mod task_runner;
-pub mod wayland;
+mod wayland;
 #[macro_use]
-pub mod macros;
+mod macros;
 
 use crate::{
     compositor::Compositor,
@@ -235,7 +235,10 @@ fn flutter_engine_init(
 }
 
 /// Read only. Need interior mutability if necessary.
-struct FlutterEngineState {
+struct FlutterEngineState
+where
+    Self: Sync,
+{
     terminate: UnboundedSender<anyhow::Result<()>>,
     opengl_state: OpenGLState,
     compositor: Compositor,
