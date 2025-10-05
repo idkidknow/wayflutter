@@ -148,6 +148,12 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
                     state,
                     egl_surface.swap_buffers(&opengl_state.render_context)
                 );
+                error_in_callback!(
+                    state,
+                    state.task_runner_handle.post_task(|engine| {
+                        let _ = engine.schedule_frame();
+                    })
+                );
                 return false;
             }
 
@@ -206,14 +212,6 @@ pub extern "C" fn present_view_callback(present_info: *const ffi::FlutterPresent
                             GetIntegerv(DRAW_FRAMEBUFFER_BINDING, &mut prev_draw_framebuffer);
                             let mut prev_texture = 0;
                             GetIntegerv(TEXTURE_BINDING_2D, &mut prev_texture);
-
-                            log::info!(
-                                "prev: {}, {}, {}, {}",
-                                prev_array_buffer,
-                                prev_vertex_array,
-                                prev_draw_framebuffer,
-                                prev_texture
-                            );
 
                             BindFramebuffer(DRAW_FRAMEBUFFER, 0);
 

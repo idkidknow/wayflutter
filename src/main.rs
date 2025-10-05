@@ -10,13 +10,13 @@ mod macros;
 use crate::{
     compositor::Compositor,
     opengl::OpenGLState,
-    task_runner::{TaskRunnerData, run_task_runner},
+    task_runner::{TaskRunnerHandle, make_task_runner},
     wayland::WaylandClient,
 };
 use anyhow::{Context, Result};
 use error::FFIFlutterEngineResultExt;
 use futures::{FutureExt, StreamExt, channel::mpsc::UnboundedSender};
-use std::{cell::Cell, ffi::CString, os::unix::ffi::OsStrExt, path::Path};
+use std::{cell::Cell, ffi::CString, os::unix::ffi::OsStrExt, path::Path, thread::ThreadId};
 use std::{ffi::c_void, mem::MaybeUninit, path::PathBuf};
 
 mod ffi {
@@ -47,9 +47,6 @@ pub async fn run_flutter(asset_path: &Path, icu_data_path: &Path) -> Result<()> 
 
     let conn = wayland_client::Connection::connect_to_env()?;
 
-    let (task_runner_tx, task_runner_rx) = futures::channel::mpsc::unbounded();
-    let task_runner_data = TaskRunnerData::new_on_current_thread(task_runner_tx);
-
     let (terminate_tx, mut terminate_rx) = futures::channel::mpsc::unbounded();
 
     let opengl_state = OpenGLState::init(&conn)?;
@@ -58,12 +55,15 @@ pub async fn run_flutter(asset_path: &Path, icu_data_path: &Path) -> Result<()> 
 
     let compositor = Compositor::init(&wayland_client, &opengl_state)?;
 
+    let (task_runner, task_runner_handle) = make_task_runner(&engine);
+
     unsafe {
         engine.init_state(FlutterEngineState {
             terminate: terminate_tx,
             compositor,
             opengl_state,
-            task_runner_data,
+            task_runner_handle,
+            platform_thread_id: std::thread::current().id(),
         });
 
         engine.run()?;
@@ -78,12 +78,10 @@ pub async fn run_flutter(asset_path: &Path, icu_data_path: &Path) -> Result<()> 
         anyhow::Ok(())
     };
 
-    let task_runner = run_task_runner(&engine, task_runner_rx);
-
     futures::select! {
         result = wayland_client.run().fuse() => { result?; },
-        result = task_runner.fuse() => result?,
         result = catch_fatal_errors.fuse() => result?,
+        result = task_runner.fuse() => { result?; },
     }
 
     anyhow::Ok(())
@@ -212,6 +210,13 @@ impl FlutterEngine {
         }
         Ok(())
     }
+
+    fn schedule_frame(&self) -> Result<()> {
+        unsafe {
+            ffi::FlutterEngineScheduleFrame(self.engine).into_flutter_engine_result()?;
+        }
+        Ok(())
+    }
 }
 
 fn flutter_engine_init(
@@ -242,5 +247,6 @@ where
     terminate: UnboundedSender<anyhow::Result<()>>,
     opengl_state: OpenGLState,
     compositor: Compositor,
-    task_runner_data: TaskRunnerData,
+    task_runner_handle: TaskRunnerHandle,
+    platform_thread_id: ThreadId,
 }

@@ -1,127 +1,114 @@
-use std::{cell::UnsafeCell, collections::BinaryHeap, time::Duration};
+use std::{convert::Infallible, pin::Pin, time::Duration};
 
 use anyhow::Result;
-use futures::{
-    FutureExt, SinkExt, StreamExt,
-    channel::mpsc::{UnboundedReceiver, UnboundedSender},
-};
+use futures::{StreamExt, channel::mpsc};
+use smol::LocalExecutor;
 
-use crate::{FlutterEngine, error::FFIFlutterEngineResultExt, ffi};
+use crate::FlutterEngine;
 
-pub struct PendingTask {
-    pub task: ffi::FlutterTask,
-    pub target_nanos: u64,
+type NormalTask = Box<dyn FnOnce(&FlutterEngine) + Send + 'static>;
+
+pub trait AsyncTask {
+    fn run<'a>(&mut self, engine: &'a FlutterEngine) -> Pin<Box<dyn Future<Output = ()> + 'a>>;
 }
 
-unsafe impl Send for PendingTask {}
-
-impl PartialEq for PendingTask {
-    fn eq(&self, other: &Self) -> bool {
-        self.target_nanos == other.target_nanos
-    }
-}
-
-impl PartialOrd for PendingTask {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        other.target_nanos.partial_cmp(&self.target_nanos)
-    }
-}
-
-impl Eq for PendingTask {}
-
-impl Ord for PendingTask {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        other.target_nanos.cmp(&self.target_nanos)
-    }
-}
-
-pub struct TaskRunnerData {
-    pub tx: UnboundedSender<PendingTask>,
-    pub main_thread: std::thread::ThreadId,
-}
-
-impl TaskRunnerData {
-    pub fn new_on_current_thread(tx: UnboundedSender<PendingTask>) -> Self {
-        Self {
-            tx,
-            main_thread: std::thread::current().id(),
+/// Trait object cannot consume self, so we take the actual AsyncFnOnce from Some(f).
+impl<F> AsyncTask for Option<F>
+where
+    F: AsyncFnOnce(&FlutterEngine) + 'static,
+{
+    fn run<'a>(&mut self, engine: &'a FlutterEngine) -> Pin<Box<dyn Future<Output = ()> + 'a>> {
+        if let Some(f) = self.take() {
+            Box::pin(f(engine))
+        } else {
+            Box::pin(futures::future::ready(()))
         }
     }
 }
 
-pub fn run_task_runner<'a>(
-    engine: &'a FlutterEngine,
-    rx: UnboundedReceiver<PendingTask>,
-) -> impl Future<Output = Result<()>> + 'a {
-    let queue = UnsafeCell::new(BinaryHeap::<PendingTask>::new());
-    let (earlier_task_pushed_tx, earlier_task_pushed) = futures::channel::mpsc::channel::<()>(1);
+enum Task
+where
+    Self: Send,
+{
+    Normal(NormalTask),
+    Async(Box<dyn AsyncTask + Send>),
+}
 
-    async move {
+#[derive(Clone)]
+pub struct TaskRunnerHandle
+where
+    Self: Sync,
+{
+    tx: mpsc::UnboundedSender<Task>,
+}
+
+impl TaskRunnerHandle {
+    pub fn post_task(
+        &self,
+        task: impl FnOnce(&FlutterEngine) + Send + 'static,
+    ) -> Result<()> {
+        let ret = self.tx.unbounded_send(Task::Normal(Box::new(task)));
+        match ret {
+            Ok(()) => Ok(()),
+            Err(_) => Err(anyhow::anyhow!("Failed to post task"))?,
+        }
+    }
+
+    pub fn post_async_task(
+        &self,
+        task: impl AsyncFnOnce(&FlutterEngine) + Send + 'static,
+    ) -> Result<()> {
+        let ret = self.tx.unbounded_send(Task::Async(Box::new(Some(task))));
+        match ret {
+            Ok(()) => Ok(()),
+            Err(_) => Err(anyhow::anyhow!("Failed to post async task"))?,
+        }
+    }
+
+    pub fn post_task_after(
+        &self,
+        task: impl FnOnce(&FlutterEngine) + Send + 'static,
+        delay: Duration,
+    ) -> Result<()> {
+        if delay.is_zero() {
+            self.post_task(task)?;
+        } else {
+            self.post_async_task(async move |engine| {
+                smol::Timer::after(delay).await;
+                task(engine);
+            })?;
+        }
+        Ok(())
+    }
+}
+
+pub fn make_task_runner<'a>(
+    engine: &'a FlutterEngine,
+) -> (
+    impl Future<Output = Result<Infallible>> + 'a,
+    TaskRunnerHandle,
+) {
+    let ex = LocalExecutor::new();
+    let (tx, rx) = mpsc::unbounded::<Task>();
+
+    let runner = async move {
         let receiving = async {
             let mut rx = rx;
-            let mut earlier_task_pushed_tx = earlier_task_pushed_tx;
             while let Some(task) = rx.next().await {
-                let now = unsafe { ffi::FlutterEngineGetCurrentTime() };
-                let target = task.target_nanos;
-                let delay = target.saturating_sub(now);
-                if delay == 0 {
-                    unsafe {
-                        ffi::FlutterEngineRunTask(engine.engine, &task.task)
-                            .into_flutter_engine_result()?;
+                match task {
+                    Task::Normal(task) => {
+                        task(engine);
                     }
-                } else {
-                    // SAFETY: single-threaded, no reentrancy and no acrossing await point
-                    let earlier: bool = unsafe {
-                        let earlier = match (*queue.get()).peek() {
-                            Some(task) => task.target_nanos > target,
-                            None => true,
-                        };
-                        (*queue.get()).push(task);
-                        earlier
-                    };
-                    if earlier {
-                        earlier_task_pushed_tx.send(()).await?;
+                    Task::Async(mut task) => {
+                        ex.spawn(task.run(engine)).detach();
                     }
                 }
             }
-            anyhow::Ok(())
+            anyhow::bail!("all task senders dropped");
         };
 
-        let executing = async {
-            let mut earlier_task_pushed = earlier_task_pushed;
-            loop {
-                // SAFETY: single-threaded, no reentrancy and no acrossing await point
-                let delay_nanos: u64 = unsafe {
-                    let queue = &mut *queue.get();
+        ex.run(receiving).await
+    };
 
-                    let mut ret = u64::MAX;
-                    while let Some(task) = queue.peek() {
-                        let now = ffi::FlutterEngineGetCurrentTime();
-                        let delay = task.target_nanos.saturating_sub(now);
-                        if delay == 0 {
-                            ffi::FlutterEngineRunTask(engine.engine, &task.task);
-                            queue.pop();
-                        } else {
-                            ret = delay;
-                            break;
-                        }
-                    }
-                    ret
-                };
-
-                let timer = smol::Timer::after(Duration::from_nanos(delay_nanos));
-                let earlier_task_pushed = earlier_task_pushed.next();
-
-                futures::select! {
-                    _ = futures::FutureExt::fuse(timer) => (),
-                    _ = earlier_task_pushed.fuse() => (),
-                };
-            }
-        };
-
-        futures::select! {
-            result = receiving.fuse() => result,
-            _ = executing.fuse() => unreachable!(),
-        }
-    }
+    (runner, TaskRunnerHandle { tx })
 }
