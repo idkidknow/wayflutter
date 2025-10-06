@@ -33,12 +33,12 @@
           ninja
 
           vulkan-loader
-          (rust-bin.nightly.latest.default.override {
+          (rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
             extensions = [
               "rust-src"
               "rust-analyzer"
             ];
-          })
+          }))
           rustPlatform.bindgenHook
         ];
 
