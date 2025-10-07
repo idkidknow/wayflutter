@@ -18,6 +18,8 @@ use smithay_client_toolkit::registry::RegistryState;
 use smithay_client_toolkit::registry_handlers;
 use smithay_client_toolkit::seat::SeatHandler;
 use smithay_client_toolkit::seat::SeatState;
+use wayland_client::protocol::wl_pointer::WlPointer;
+use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::Connection;
 use wayland_client::EventQueue;
 use wayland_client::globals::registry_queue_init;
@@ -25,6 +27,7 @@ use wayland_client::globals::registry_queue_init;
 use crate::FlutterEngine;
 
 pub mod layer_shell;
+mod pointer;
 
 pub struct WaylandClient<'a> {
   conn: &'a Connection,
@@ -55,6 +58,7 @@ impl<'a> WaylandClient<'a> {
       compositor_state,
       seat_state,
       layer_shell,
+      pointer: None,
     };
 
     Ok(Self {
@@ -107,6 +111,7 @@ struct WaylandState {
   compositor_state: CompositorState,
   seat_state: SeatState,
   layer_shell: ZwlrLayerShellV1,
+  pointer: Option<WlPointer>,
 }
 
 impl ProvidesRegistryState for WaylandState {
@@ -114,7 +119,7 @@ impl ProvidesRegistryState for WaylandState {
     &mut self.registry_state
   }
 
-  registry_handlers![OutputState];
+  registry_handlers![OutputState, SeatState];
 }
 
 delegate_registry!(WaylandState);
@@ -209,25 +214,7 @@ impl SeatHandler for WaylandState {
     &mut self,
     _conn: &Connection,
     _qh: &wayland_client::QueueHandle<Self>,
-    _seat: wayland_client::protocol::wl_seat::WlSeat,
-  ) {
-  }
-
-  fn new_capability(
-    &mut self,
-    _conn: &Connection,
-    _qh: &wayland_client::QueueHandle<Self>,
-    _seat: wayland_client::protocol::wl_seat::WlSeat,
-    _capability: smithay_client_toolkit::seat::Capability,
-  ) {
-  }
-
-  fn remove_capability(
-    &mut self,
-    _conn: &Connection,
-    _qh: &wayland_client::QueueHandle<Self>,
-    _seat: wayland_client::protocol::wl_seat::WlSeat,
-    _capability: smithay_client_toolkit::seat::Capability,
+    _seat: WlSeat,
   ) {
   }
 
@@ -235,8 +222,42 @@ impl SeatHandler for WaylandState {
     &mut self,
     _conn: &Connection,
     _qh: &wayland_client::QueueHandle<Self>,
-    _seat: wayland_client::protocol::wl_seat::WlSeat,
+    _seat: WlSeat,
+  ) {}
+
+  fn new_capability(
+    &mut self,
+    _conn: &Connection,
+    qh: &wayland_client::QueueHandle<Self>,
+    seat: WlSeat,
+    capability: smithay_client_toolkit::seat::Capability,
   ) {
+    match capability {
+      smithay_client_toolkit::seat::Capability::Pointer => {
+        let Ok(pointer) = self.seat_state.get_pointer(qh, &seat) else {
+          return;
+        };
+        self.pointer = Some(pointer);
+      }
+      _ => {}
+    }
+  }
+
+  fn remove_capability(
+    &mut self,
+    _conn: &Connection,
+    _qh: &wayland_client::QueueHandle<Self>,
+    _seat: WlSeat,
+    capability: smithay_client_toolkit::seat::Capability,
+  ) {
+    match capability {
+      smithay_client_toolkit::seat::Capability::Pointer => {
+        if let Some(pointer) = &self.pointer {
+          pointer.release();
+        }
+      }
+      _ => {}
+    }
   }
 }
 
